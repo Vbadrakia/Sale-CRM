@@ -1,0 +1,48 @@
+{
+  "name": "crm-project",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Sales CRM monorepo",
+  "workspaces": [
+    "frontend",
+    "backend"
+  ],
+  "scripts": {
+    "setup": "node scripts/setup.cjs",
+    "dev": "node scripts/dev.cjs",
+    "dev:frontend": "npm run dev -w frontend",
+    "dev:backend": "npm run dev -w backend",
+    "build": "npm run build -w frontend && npm run build -w backend",
+    "build:frontend": "npm run build -w frontend",
+    "build:backend": "npm run build -w backend",
+    "build:worker": "npx wrangler deploy --dry-run",
+    "deploy": "npx wrangler deploy",
+    "deploy:worker": "npx wrangler deploy",
+    "deploy:pages": "npx wrangler pages deploy frontend/dist --project-name=meri-crm",
+    "deploy:frontend": "npm run deploy",
+    "typecheck": "npm run typecheck -w frontend && npm run typecheck -w backend",
+    "lint": "npm run lint -w frontend && npm run lint -w backend",
+    "db:check": "npm run db:check -w backend",
+    "db:migrate": "npm run db:migrate -w backend",
+    "db:migrate:undo": "npm run db:migrate:undo -w backend",
+    "db:reset": "node scripts/db-reset.cjs",
+    "db:seed": "npm run db:seed -w backend",
+    "test": "npm run test -w backend",
+    "doctor": "npm run doctor -w backend",
+    "audit": "npm audit --omit=dev"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.10.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.7",
+    "typescript-eslint": "^8.70.0"
+  },
+  "overrides": {
+    "iconv-lite": "0.6.3",
+    "uuid": "^11.1.1"
+  }
+}

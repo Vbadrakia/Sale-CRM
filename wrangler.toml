@@ -1,0 +1,22 @@
+name = "sale-crm"
+main = "worker/index.ts"
+compatibility_date = "2026-08-04"
+compatibility_flags = ["nodejs_compat", "enable_nodejs_http_server_modules"]
+
+[assets]
+directory = "frontend/dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+
+[[hyperdrive]]
+binding = "HYPERDRIVE"
+id = "053c2b3f72514f95b5ab07f3ba6d6c6c"
+
+[triggers]
+crons = ["*/10 * * * *"]
+
+[vars]
+NODE_ENV = "production"
+JWT_SECRET = "sale-crm-production-jwt-secret-key-32-chars-min-secure"
+CORS_ORIGINS = "https://sale-crm.vedantbadrakia07.workers.dev,http://localhost:5173,http://localhost:5000"
+FRONTEND_URL = "https://sale-crm.vedantbadrakia07.workers.dev"
