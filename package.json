@@ -24,7 +24,6 @@
     "lint": "npm run lint -w frontend && npm run lint -w backend",
     "db:check": "npm run db:check -w backend",
     "db:migrate": "npm run db:migrate -w backend",
-    "db:migrate:undo": "npm run db:migrate:undo -w backend",
     "db:reset": "node scripts/db-reset.cjs",
     "db:seed": "npm run db:seed -w backend",
     "test": "npm run test -w backend",
@@ -43,6 +42,8 @@
   },
   "overrides": {
     "iconv-lite": "0.6.3",
-    "uuid": "^11.1.1"
+    "uuid": "^11.1.1",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   }
 }
+

@@ -3,7 +3,7 @@ FROM node:20-alpine AS build
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci
-COPY tsconfig.json .sequelizerc ./
+COPY tsconfig.json ./
 COPY src ./src
 RUN npm run build
 
@@ -17,11 +17,6 @@ COPY package*.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 
 COPY --from=build /app/dist ./dist
-# Migrations/seeds are run with tsx/sequelize-cli from source in CI or by an
-# operator; the compiled JS migrations are copied for `npm run db:migrate`.
-COPY .sequelizerc ./
-COPY src/config/sequelize-cli.js ./src/config/sequelize-cli.js
-COPY src/migrations ./src/migrations
 
 USER node
 EXPOSE 5000

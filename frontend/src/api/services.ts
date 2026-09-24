@@ -97,6 +97,7 @@ export const importApi = {
   jobs: () => request<ImportJob[]>('/leads/import/jobs'),
   job: (id: number) =>
     request<{ job: ImportJob; errors: { id: number; rowNumber: number; reason: string }[] }>(`/leads/import/${id}`),
+  cancel: (id: number) => request<ImportJob>(`/leads/import/${id}/cancel`, { method: 'POST' }),
 };
 
 /* -------------------------------- followups ------------------------------- */

@@ -52,8 +52,8 @@ function checkDependencies() {
   const packageJsonPath = path.join(BACKEND_DIR, 'package.json');
   const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
   
-  const requiredDeps = ['pg', 'sequelize', 'tsx', 'dotenv'];
-  const devDeps = ['sequelize-cli'];
+  const requiredDeps = ['pg', 'sequelize', 'dotenv'];
+  const devDeps = ['tsx', 'typescript'];
   
   for (const dep of requiredDeps) {
     if (!packageJson.dependencies[dep]) {
@@ -78,26 +78,39 @@ function checkPostgreSQL() {
     const result = execSync('pg_isready --version', { encoding: 'utf8' });
     log(`PostgreSQL client ${result.trim()} - OK`);
   } catch (err) {
-    log('pg_isready is not in PATH (skipping CLI check; Sequelize will verify DB connection).');
+    log('pg_isready is not in PATH (skipping CLI check; Sequelize/pg will verify DB connection).');
   }
 }
 
 function checkEnvFile() {
   log('Checking environment files...');
   const backendEnvPath = path.join(BACKEND_DIR, '.env');
+  const backendEnvExamplePath = path.join(BACKEND_DIR, '.env.example');
   const frontendEnvPath = path.join(FRONTEND_DIR, '.env');
+  const frontendEnvExamplePath = path.join(FRONTEND_DIR, '.env.example');
   
   if (!fs.existsSync(backendEnvPath)) {
-    error('Backend .env file not found. Copy .env.example to .env in backend directory.');
-    process.exit(1);
+    if (fs.existsSync(backendEnvExamplePath)) {
+      log('Creating backend .env from .env.example...');
+      fs.copyFileSync(backendEnvExamplePath, backendEnvPath);
+    } else {
+      error('Backend .env file not found.');
+      process.exit(1);
+    }
   }
   log('Backend .env file - OK');
   
   if (!fs.existsSync(frontendEnvPath)) {
-    error('Frontend .env file not found. Copy .env.example to .env in frontend directory.');
-    process.exit(1);
+    if (fs.existsSync(frontendEnvExamplePath)) {
+      log('Creating frontend .env from .env.example...');
+      fs.copyFileSync(frontendEnvExamplePath, frontendEnvPath);
+    } else {
+      error('Frontend .env file not found.');
+      process.exit(1);
+    }
   }
   log('Frontend .env file - OK');
+
 }
 
 function loadEnvVars() {
@@ -148,16 +161,11 @@ function runSeeders() {
 
 function printCredentials() {
   log('Setup completed successfully!');
-  log('\n=== Admin Login Credentials ===');
+  log('\n=== Local Development Demo Credentials (NON-PRODUCTION ONLY) ===');
   log('Email: admin@crm.local');
   log('Password: Password123');
-  log('\n=== BDE Login Credentials ===');
-  log('Email: ravi@crm.local');
-  log('Password: Password123');
-  log('Email: neha@crm.local');
-  log('Password: Password123');
-  log('Email: sam@crm.local');
-  log('Password: Password123');
+  log('BDE Accounts: ravi@crm.local, neha@crm.local, sam@crm.local (Password123)');
+  log('\nNOTE: Production environments must NEVER use default or demo credentials.');
   log('\n=== URLs ===');
   log('Frontend: http://localhost:5173');
   log('Backend: http://localhost:5000');

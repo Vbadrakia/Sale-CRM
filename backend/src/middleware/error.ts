@@ -55,7 +55,20 @@ export function errorHandler(err: unknown, req: Request, res: Response, _next: N
   }
 
   if (statusCode >= 500) {
-    console.error(`[SERVER_ERROR] reqId=${req.id || 'none'} status=${statusCode} code=${code}`, err);
+    console.error(`[SERVER_ERROR] [reqId=${req.id || 'none'}] status=${statusCode} code=${code}`, err);
+  }
+
+  // In production, never leak internal error details, SQL, paths, or stacks
+  if (env.isProduction) {
+    if (statusCode >= 500) {
+      if (code === 'DATABASE_ERROR' || code === 'DATABASE_UNAVAILABLE') {
+        message = 'Database service temporarily unavailable';
+      } else {
+        message = 'Internal server error';
+      }
+    } else if (/([A-Za-z]:\\|\/home\/|\/app\/|SELECT |INSERT |UPDATE |DELETE |FROM |password|secret)/i.test(message)) {
+      message = 'Invalid request';
+    }
   }
 
   const body: Record<string, unknown> = {

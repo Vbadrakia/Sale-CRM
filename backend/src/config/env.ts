@@ -1,26 +1,54 @@
+import crypto from 'crypto';
 import dotenv from 'dotenv';
 
 dotenv.config();
 
-function getJwtSecret(): string {
-  const isProd = (process.env.NODE_ENV || 'development') === 'production';
-  let jwtSecret = process.env.JWT_SECRET || '';
+// SHA-256 hashes of known compromised/insecure secrets
+const COMPROMISED_SECRET_HASHES = new Set([
+  '9be52467d0cf98a287a25039e1bfd8ea1b0f592fc62c2f42a7c4f4a3bc6f01ba', // SHA-256 of previously compromised key
+  'e64c39f0e1180ee8c460b14421b44b62dbb730ee0f0e8f3a388b14da17637db7', // SHA-256 of dev-only-insecure-secret-change-me-min-32-chars-long
+]);
 
-  if (!jwtSecret) {
+function isCompromisedSecret(secret: string): boolean {
+  if (!secret || secret.length < 32) return true;
+  const hash = crypto.createHash('sha256').update(secret).digest('hex');
+  return COMPROMISED_SECRET_HASHES.has(hash);
+}
+
+const isWorkerEnvironment =
+  typeof (globalThis as unknown as { WebSocketPair?: unknown }).WebSocketPair !== 'undefined';
+
+let currentJwtSecret: string = process.env.JWT_SECRET || '';
+
+function validateAndGetJwtSecret(): string {
+  const isProd = (process.env.NODE_ENV || 'development') === 'production';
+  if (!currentJwtSecret) {
     if (isProd) {
-      throw new Error('FATAL SECURITY ERROR: JWT_SECRET environment variable is missing in production!');
+      if (isWorkerEnvironment) {
+        throw new Error('FATAL SECURITY ERROR: JWT_SECRET secret binding has not been initialized in Worker runtime!');
+      } else {
+        throw new Error('FATAL SECURITY ERROR: JWT_SECRET environment variable is missing in production!');
+      }
     } else {
       console.warn('[SECURITY WARNING] Using dev fallback JWT_SECRET in non-production mode. Set JWT_SECRET before deploying.');
-      jwtSecret = 'dev-only-insecure-secret-change-me-min-32-chars-long';
+      return 'dev-only-insecure-secret-change-me-min-32-chars-long';
     }
   }
 
-  return jwtSecret;
+  if (isProd && isCompromisedSecret(currentJwtSecret)) {
+    throw new Error('FATAL SECURITY ERROR: Configured JWT_SECRET is compromised or insecure for production use!');
+  }
+
+  return currentJwtSecret;
 }
+
+const isProduction = (process.env.NODE_ENV || 'development') === 'production';
+const defaultDevCors = 'http://localhost:5173,http://localhost:5000,http://127.0.0.1:5173,http://127.0.0.1:5000';
+const rawCors = process.env.CORS_ORIGINS || process.env.CORS_ORIGIN || process.env.FRONTEND_URL || (isProduction ? '' : defaultDevCors);
 
 export const env = {
   nodeEnv: process.env.NODE_ENV || 'development',
-  isProduction: (process.env.NODE_ENV || 'development') === 'production',
+  isProduction,
   port: Number(process.env.PORT || 5000),
 
   supabase: {
@@ -43,7 +71,12 @@ export const env = {
   },
 
   jwt: {
-    secret: getJwtSecret(),
+    get secret(): string {
+      return validateAndGetJwtSecret();
+    },
+    set secret(val: string) {
+      currentJwtSecret = val;
+    },
     expiresIn: process.env.JWT_EXPIRES_IN || '7d',
   },
 
@@ -72,7 +105,7 @@ export const env = {
 
   frontendUrl: process.env.FRONTEND_URL || 'https://sale-crm.vedantbadrakia07.workers.dev',
   backendUrl: process.env.BACKEND_URL || 'https://sale-crm.vedantbadrakia07.workers.dev',
-  corsOrigins: (process.env.CORS_ORIGINS || process.env.CORS_ORIGIN || process.env.FRONTEND_URL || 'https://sale-crm.vedantbadrakia07.workers.dev,http://localhost:5173,http://localhost:5000,http://127.0.0.1:5173,http://127.0.0.1:5000')
+  corsOrigins: rawCors
     .split(',')
     .map((o) => o.trim())
     .filter(Boolean),
@@ -96,11 +129,15 @@ export function updateRuntimeEnv(envBindings: Record<string, unknown>): void {
     env.frontendUrl = envBindings.FRONTEND_URL;
   }
   if (typeof envBindings.CORS_ORIGINS === 'string' && envBindings.CORS_ORIGINS) {
-    const list = envBindings.CORS_ORIGINS.split(',').map((o) => o.trim()).filter(Boolean);
-    env.corsOrigins = Array.from(new Set([...env.corsOrigins, ...list]));
+    env.corsOrigins = envBindings.CORS_ORIGINS.split(',').map((o) => o.trim()).filter(Boolean);
   }
-  if (env.isProduction && (!env.jwt.secret || env.jwt.secret === 'dev-only-insecure-secret-change-me-min-32-chars-long')) {
-    throw new Error('FATAL SECURITY ERROR: JWT_SECRET environment variable is invalid or insecure in production!');
+  if (env.isProduction) {
+    void env.jwt.secret;
   }
 }
+
+if (isProduction && !isWorkerEnvironment && !currentJwtSecret) {
+  validateAndGetJwtSecret();
+}
+
 

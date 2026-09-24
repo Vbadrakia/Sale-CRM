@@ -90,6 +90,22 @@ export interface ParsedSheet {
 
 /** Parses an uploaded buffer safely. Formulas are never evaluated. */
 export function parseSpreadsheet(buffer: Buffer, fileName: string): ParsedSheet {
+  if (!buffer || buffer.length === 0) {
+    throw ApiError.badRequest(`Could not read "${fileName}". The file is empty.`);
+  }
+
+  const isZip = buffer.length >= 4 && buffer[0] === 0x50 && buffer[1] === 0x4b;
+  const isOle = buffer.length >= 8 && buffer[0] === 0xd0 && buffer[1] === 0xcf;
+  const isXlsx = fileName.toLowerCase().endsWith('.xlsx');
+  const isXls = fileName.toLowerCase().endsWith('.xls');
+
+  if (isXlsx && !isZip) {
+    throw ApiError.badRequest(`Could not read "${fileName}". The file appears to be malformed.`);
+  }
+  if (isXls && !isOle && !isZip) {
+    throw ApiError.badRequest(`Could not read "${fileName}". The file appears to be malformed.`);
+  }
+
   let workbook: XLSX.WorkBook;
   try {
     workbook = XLSX.read(buffer, {

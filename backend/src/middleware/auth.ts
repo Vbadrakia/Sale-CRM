@@ -38,24 +38,14 @@ export async function authenticate(req: Request, _res: Response, next: NextFunct
     return next(ApiError.unauthorized('Invalid authentication token', 'AUTH_INVALID_TOKEN'));
   }
 
-  // Step 2: Query User record from database (with timeout; fallback to token payload if DB is unavailable)
+  // Step 2: Query User record from database (FAIL CLOSED: never construct fallback from JWT claims)
   let user: User | null;
   try {
     user = await User.findByPk(payload.id, { timeout: 3000 } as unknown as Parameters<typeof User.findByPk>[1]);
   } catch (dbErr: unknown) {
     const errMsg = dbErr instanceof Error ? dbErr.message : String(dbErr);
-    console.warn(`[AUTH] auth.session_check_fallback reason=DATABASE_TIMEOUT_OR_UNAVAILABLE userId=${payload.id} reqId=${req.id || 'none'} err=${errMsg}`);
-    user = User.build({
-      id: payload.id,
-      email: payload.email,
-      role: payload.role,
-      isActive: true,
-      emailVerified: true,
-      firstName: 'User',
-      lastName: '',
-      passwordHash: '',
-      tokenVersion: payload.tokenVersion ?? 0,
-    });
+    console.error(`[AUTH] auth.session_check_failed reason=DATABASE_UNAVAILABLE userId=${payload.id} reqId=${req.id || 'none'} err=${errMsg}`);
+    return next(ApiError.database('Authentication service temporarily unavailable', 'DATABASE_UNAVAILABLE'));
   }
 
   // Step 3: Validate user existence and status

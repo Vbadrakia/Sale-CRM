@@ -11,6 +11,7 @@ import { getValidatedQuery } from '../middleware/validate';
 import { listUsersQuerySchema } from '../validators/user.validators';
 import { sendWelcomeEmail } from '../services/mailer.service';
 import { currentUser } from '../middleware/auth';
+import { env } from '../config/env';
 
 function generateTemporaryPassword(): string {
   return `Crm${crypto.randomBytes(4).toString('hex')}${crypto.randomInt(10, 99)}`;
@@ -102,8 +103,11 @@ export async function createUser(req: Request, res: Response) {
 
   return sendCreated(
     res,
-    { ...toPublicUser(user), temporaryPassword: body.password ? undefined : temporaryPassword },
-    'User created. A welcome email with the temporary password was sent.',
+    {
+      ...toPublicUser(user),
+      ...(env.isProduction ? {} : { temporaryPassword: body.password ? undefined : temporaryPassword }),
+    },
+    'User created. A welcome email with login instructions was sent.',
   );
 }
 
@@ -172,7 +176,11 @@ export async function resetUserPassword(req: Request, res: Response) {
 
   return sendSuccess(
     res,
-    { temporaryPassword: password ? undefined : newPassword },
+    {
+      success: true,
+      ...(env.isProduction ? {} : { temporaryPassword: password ? undefined : newPassword }),
+    },
     'Password reset. The user has been emailed their new password.',
   );
 }
+

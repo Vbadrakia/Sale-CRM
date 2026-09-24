@@ -96,12 +96,40 @@ export default function ImportsPage() {
     if (file) void runPreview(file, next);
   }
 
+  const refreshJobsSilent = useCallback(async () => {
+    try {
+      const result = await importApi.jobs();
+      setJobs(result.data);
+    } catch {
+      // silent background refresh
+    }
+  }, []);
+
+  useEffect(() => {
+    const hasActive = jobs.some((j) => j.status === 'PENDING' || j.status === 'PROCESSING');
+    if (!hasActive) return;
+    const timer = setInterval(() => {
+      void refreshJobsSilent();
+    }, 2500);
+    return () => clearInterval(timer);
+  }, [jobs, refreshJobsSilent]);
+
+  async function cancelJob(jobId: number) {
+    try {
+      await importApi.cancel(jobId);
+      toast.success('Import job cancelled');
+      await refreshJobsSilent();
+    } catch (err) {
+      toast.error(err instanceof ApiRequestError ? err.message : 'Could not cancel import job');
+    }
+  }
+
   async function confirmImport() {
     if (!file) return;
     setImporting(true);
     try {
       const result = await importApi.confirm(file, mapping, duplicateStrategy, isAdmin && assignedBdeId ? Number(assignedBdeId) : null);
-      toast.success(`Imported ${result.data.importedRows} of ${result.data.totalRows} rows`);
+      toast.success(`Import job started for ${result.data.fileName}. Processing in background...`);
       setFile(null);
       setPreview(null);
       if (fileInput.current) fileInput.current.value = '';
@@ -262,12 +290,14 @@ export default function ImportsPage() {
               <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
                 <tr>
                   <th className="px-4 py-2.5">File</th>
+                  <th className="px-4 py-2.5">Status</th>
                   <th className="px-4 py-2.5">When</th>
                   <th className="px-4 py-2.5">Imported by</th>
                   <th className="px-4 py-2.5">Rows</th>
                   <th className="px-4 py-2.5">Imported</th>
                   <th className="px-4 py-2.5">Skipped</th>
                   <th className="px-4 py-2.5 text-right">Errors</th>
+                  <th className="px-4 py-2.5 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -278,6 +308,26 @@ export default function ImportsPage() {
                         <FileSpreadsheet className="h-4 w-4 text-slate-400" />
                         {job.fileName}
                       </span>
+                    </td>
+                    <td className="px-4 py-2.5">
+                      {job.status === 'COMPLETED' && (
+                        <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700">Completed</span>
+                      )}
+                      {job.status === 'COMPLETED_WITH_ERRORS' && (
+                        <span className="rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700">Completed with errors</span>
+                      )}
+                      {job.status === 'FAILED' && (
+                        <span className="rounded-full bg-red-50 px-2 py-0.5 text-xs font-medium text-red-700">Failed</span>
+                      )}
+                      {job.status === 'CANCELLED' && (
+                        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700">Cancelled</span>
+                      )}
+                      {job.status === 'PROCESSING' && (
+                        <span className="rounded-full bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700">Processing...</span>
+                      )}
+                      {job.status === 'PENDING' && (
+                        <span className="rounded-full bg-yellow-50 px-2 py-0.5 text-xs font-medium text-yellow-700">Pending</span>
+                      )}
                     </td>
                     <td className="px-4 py-2.5 text-slate-600">{formatDateTime(job.createdAt)}</td>
                     <td className="px-4 py-2.5 text-slate-600">{job.creator ? `${job.creator.firstName} ${job.creator.lastName}` : '—'}</td>
@@ -291,6 +341,15 @@ export default function ImportsPage() {
                         </Button>
                       ) : (
                         <span className="text-slate-400">0</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-2.5 text-right">
+                      {(job.status === 'PROCESSING' || job.status === 'PENDING') && (isAdmin || job.createdById === user?.id) ? (
+                        <Button small variant="secondary" onClick={() => void cancelJob(job.id)}>
+                          Cancel
+                        </Button>
+                      ) : (
+                        <span className="text-slate-400">—</span>
                       )}
                     </td>
                   </tr>

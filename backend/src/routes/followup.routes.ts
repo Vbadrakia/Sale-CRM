@@ -21,5 +21,7 @@ router.get('/:id', asyncHandler(controller.getFollowUp));
 router.patch('/:id', validateBody(updateFollowUpSchema), asyncHandler(controller.updateFollowUp));
 router.patch('/:id/complete', validateBody(completeFollowUpSchema), asyncHandler(controller.completeFollowUp));
 router.patch('/:id/cancel', validateBody(cancelFollowUpSchema), asyncHandler(controller.cancelFollowUp));
+router.delete('/:id', asyncHandler(controller.deleteFollowUp));
 
 export default router;
+

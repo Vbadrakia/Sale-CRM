@@ -7,7 +7,7 @@ module.exports = tseslint.config(
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
-    ignores: ['**/dist/**', '**/node_modules/**', '**/src/migrations/**'],
+    ignores: ['**/dist/**', '**/node_modules/**'],
   },
   {
     plugins: {

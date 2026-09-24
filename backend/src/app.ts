@@ -33,16 +33,14 @@ export function createApp() {
   app.use(
     cors({
       origin: (origin, callback) => {
-        if (
-          !origin ||
-          env.corsOrigins.includes(origin) ||
-          env.corsOrigins.includes('*') ||
-          origin === env.frontendUrl ||
-          origin.includes('.workers.dev')
-        ) {
+        if (!origin) {
           return callback(null, true);
         }
-        callback(ApiError.forbidden(`CORS policy does not allow access from origin ${origin}`, 'CORS_NOT_ALLOWED'));
+        const isAllowed = env.corsOrigins.includes(origin) || (Boolean(env.frontendUrl) && origin === env.frontendUrl);
+        if (isAllowed) {
+          return callback(null, true);
+        }
+        callback(ApiError.forbidden('CORS policy does not allow access from this origin', 'CORS_NOT_ALLOWED'));
       },
       credentials: true,
       methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],

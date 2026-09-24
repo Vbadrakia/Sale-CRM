@@ -9,6 +9,7 @@ import { OtpToken } from './OtpToken';
 import { PasswordResetToken } from './PasswordResetToken';
 import { ImportJob } from './ImportJob';
 import { ImportError } from './ImportError';
+import { RateLimit } from './RateLimit';
 import { normalizeCompareText, normalizeEmail, normalizeWebsite, phoneCompareKey } from '../utils/normalize';
 
 /* ---------------------------------- hooks --------------------------------- */
@@ -75,6 +76,8 @@ export {
   PasswordResetToken,
   ImportJob,
   ImportError,
+  RateLimit,
 };
+
 
 export { toPublicUser } from './User';

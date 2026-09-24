@@ -17,6 +17,5 @@ crons = ["*/10 * * * *"]
 
 [vars]
 NODE_ENV = "production"
-JWT_SECRET = "sale-crm-production-jwt-secret-key-32-chars-min-secure"
-CORS_ORIGINS = "https://sale-crm.vedantbadrakia07.workers.dev,http://localhost:5173,http://localhost:5000"
+CORS_ORIGINS = "https://sale-crm.vedantbadrakia07.workers.dev"
 FRONTEND_URL = "https://sale-crm.vedantbadrakia07.workers.dev"

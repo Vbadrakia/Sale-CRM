@@ -309,6 +309,13 @@ export async function assignLead(req: Request, res: Response) {
   lead.assignedBdeId = assignedBdeId;
   await lead.save();
 
+  // In MODEL A: update pending follow-ups so they remain aligned with the lead's new owner
+  await FollowUp.update(
+    { assignedToId: assignedBdeId },
+    { where: { leadId: lead.id, status: 'PENDING' } },
+  );
+
+
   await logActivity({
     leadId: lead.id,
     userId: user.id,

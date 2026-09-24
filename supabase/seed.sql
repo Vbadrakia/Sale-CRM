@@ -1,8 +1,8 @@
--- Supabase PostgreSQL Seed Data (seed.sql)
--- Default demo accounts & initial leads data for Meri CRM
-
--- Password hash for 'Password123' generated with bcrypt
--- Hash: $2a$12$R.vX/30yEwK9WzQ1zZ0H/e7W1lY1n3rJ1Y1n3rJ1Y1n3rJ1Y1n3rJ (standard bcrypt)
+-- Supabase PostgreSQL Development Seed Data (seed.sql)
+-- STRICTLY FOR LOCAL DEVELOPMENT AND TESTING ONLY.
+-- DO NOT APPLY TO PRODUCTION DATABASES. Production accounts must be provisioned individually.
+--
+-- Demo accounts usebcrypt hash for 'Password123'
 
 INSERT INTO users (first_name, last_name, email, phone, password_hash, role, is_active, email_verified)
 VALUES 

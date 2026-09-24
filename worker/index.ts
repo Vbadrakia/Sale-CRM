@@ -2,6 +2,7 @@ import { createServer } from 'node:http';
 import { httpServerHandler } from 'cloudflare:node';
 import { createApp } from '../backend/src/app';
 import { runFollowUpReminderJob } from '../backend/src/jobs/followupReminders';
+import { runImportRetentionJob } from '../backend/src/jobs/importRetention';
 import { assertDatabaseConnection, updateDatabaseConfig } from '../backend/src/config/database';
 import { updateRuntimeEnv } from '../backend/src/config/env';
 import '../backend/src/models';
@@ -23,23 +24,28 @@ export interface Env {
 let httpHandlerInstance: unknown = null;
 let isWorkerConfigInitialized = false;
 
-function getCorsHeaders(request: Request, env: Env): Record<string, string> {
-  const origin = request.headers.get('Origin') || '';
+function isOriginAllowed(origin: string, env: Env): boolean {
+  if (!origin) return false;
   const allowedOrigins = (env.CORS_ORIGINS as string || '').split(',').map(o => o.trim()).filter(Boolean);
-  const frontendUrl = (env.FRONTEND_URL as string) || '';
+  const frontendUrl = (env.FRONTEND_URL as string || '').trim();
+  return allowedOrigins.includes(origin) || (Boolean(frontendUrl) && origin === frontendUrl);
+}
 
-  const isAllowed =
-    !origin ||
-    allowedOrigins.includes(origin) ||
-    origin === frontendUrl ||
-    origin.includes('.workers.dev');
+function getCorsHeaders(request: Request, env: Env): Record<string, string> {
+  const origin = request.headers.get('Origin');
+  if (!origin || !isOriginAllowed(origin, env)) {
+    return {
+      'Vary': 'Origin',
+    };
+  }
 
   return {
-    'Access-Control-Allow-Origin': isAllowed ? (origin || '*') : allowedOrigins[0] || '*',
+    'Access-Control-Allow-Origin': origin,
     'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Requested-With, X-Request-ID',
     'Access-Control-Allow-Credentials': 'true',
     'Access-Control-Expose-Headers': 'X-Request-ID',
+    'Vary': 'Origin',
   };
 }
 
@@ -95,8 +101,23 @@ export default {
     const url = new URL(request.url);
     const corsHeaders = getCorsHeaders(request, env);
 
-    // Handle CORS preflight at the worker level so it always succeeds
+    // Handle CORS preflight at the worker level with exact origin validation
     if (request.method === 'OPTIONS') {
+      const origin = request.headers.get('Origin');
+      if (origin && !isOriginAllowed(origin, env)) {
+        return new Response(
+          JSON.stringify({
+            success: false,
+            code: 'CORS_NOT_ALLOWED',
+            message: 'CORS policy does not allow access from this origin',
+            requestId,
+          }),
+          {
+            status: 403,
+            headers: { 'Content-Type': 'application/json', 'x-request-id': requestId, Vary: 'Origin' },
+          },
+        );
+      }
       return new Response(null, { status: 204, headers: corsHeaders });
     }
 
@@ -109,14 +130,15 @@ export default {
         try {
           return await handler.fetch(request, env, ctx);
         } catch (handlerErr: unknown) {
-          console.error('[Worker Express Handler Error]:', handlerErr);
-          const errMsg = handlerErr instanceof Error ? `${handlerErr.message}\n${handlerErr.stack || ''}` : String(handlerErr);
+          console.error(`[Worker Express Handler Error] [reqId=${requestId}]:`, handlerErr);
+          const isProd = process.env.NODE_ENV === 'production';
+          const errMsg = handlerErr instanceof Error ? handlerErr.message : String(handlerErr);
           return new Response(
             JSON.stringify({
               success: false,
               code: 'SERVER_ERROR',
-              message: 'Worker Express handler error',
-              details: errMsg,
+              message: 'Internal server error',
+              ...(isProd ? {} : { details: errMsg }),
               requestId,
             }),
             {
@@ -134,7 +156,7 @@ export default {
 
       return new Response('Not Found', { status: 404 });
     } catch (err: unknown) {
-      console.error('[Worker Error]:', err);
+      console.error(`[Worker Error] [reqId=${requestId}]:`, err);
       const isProd = process.env.NODE_ENV === 'production';
       const errMsg = err instanceof Error ? err.message : String(err);
       const isDbErr = errMsg.toLowerCase().includes('database') || errMsg.toLowerCase().includes('connection') || errMsg.toLowerCase().includes('hyperdrive');
@@ -155,14 +177,17 @@ export default {
     }
   },
 
+
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
     await initializeWorkerConfig(event ? env : env);
 
     try {
       const result = await runFollowUpReminderJob();
       console.log(`[cron] follow-up reminders: ${result.reminders}, overdue: ${result.overdue}`);
+      await runImportRetentionJob();
     } catch (err) {
-      console.error('[cron] follow-up reminders job failed:', err);
+      console.error('[cron] scheduled job failed:', err);
     }
   },
 };
+

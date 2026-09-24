@@ -6,9 +6,14 @@ const rawDbUrl = (process.env.DATABASE_URL || env.db.connectionString || '')
   .replace('://localhost', '://127.0.0.1')
   .replace('@localhost', '@127.0.0.1');
 const dbHost = env.db.host === 'localhost' ? '127.0.0.1' : env.db.host;
+
+const isValidPgUrl = (url?: string): boolean =>
+  Boolean(url && (url.startsWith('postgres://') || url.startsWith('postgresql://')));
+
 const dbUrl =
-  rawDbUrl ||
-  `postgres://${encodeURIComponent(env.db.user)}:${encodeURIComponent(env.db.password)}@${dbHost}:${env.db.port}/${env.db.name}`;
+  isValidPgUrl(rawDbUrl)
+    ? rawDbUrl
+    : `postgres://${encodeURIComponent(env.db.user)}:${encodeURIComponent(env.db.password)}@${dbHost}:${env.db.port}/${env.db.name}`;
 
 const isTestOrSslDisabled =
   process.env.NODE_ENV === 'test' ||
@@ -28,6 +33,19 @@ const validateWorkerConnection = (client: unknown): boolean => {
   }
   return true;
 };
+
+function getSslConfig(): false | { require: boolean; rejectUnauthorized: boolean; ca?: string } {
+  if (isTestOrSslDisabled) return false;
+
+  const rejectUnauthorized = process.env.DB_SSL_REJECT_UNAUTHORIZED !== 'false';
+  const caCert = process.env.DB_CA_CERT || process.env.DB_SSL_CA;
+
+  return {
+    require: true,
+    rejectUnauthorized,
+    ...(caCert ? { ca: caCert } : {}),
+  };
+}
 
 export const sequelize = new Sequelize(dbUrl, {
   dialect: 'postgres',
@@ -49,9 +67,13 @@ export const sequelize = new Sequelize(dbUrl, {
     connectTimeout: 5000,
     ...(isTestOrSslDisabled || isWorkerRuntime
       ? {}
-      : { ssl: { require: true, rejectUnauthorized: false } }),
+      : (() => {
+          const ssl = getSslConfig();
+          return ssl ? { ssl } : {};
+        })()),
   },
 });
+
 
 interface ConnectionManagerPool {
   destroyAllNow?: () => Promise<void>;
@@ -108,13 +130,23 @@ sequelize.addHook('beforeConnect', (config: unknown) => {
     delete connConfig.ssl;
   } else {
     if (!connConfig.dialectOptions) connConfig.dialectOptions = {};
-    connConfig.dialectOptions.ssl = { require: true, rejectUnauthorized: false };
+    const ssl = getSslConfig();
+    if (ssl) {
+      connConfig.dialectOptions.ssl = ssl;
+    } else {
+      delete connConfig.dialectOptions.ssl;
+    }
   }
 });
 
 export function updateDatabaseConfig(connectionString: string): void {
   if (!connectionString) {
     throw new Error('[worker-db] Cannot initialize database with empty connection string!');
+  }
+
+  if (!isValidPgUrl(connectionString)) {
+    console.warn('[worker-db] Connection string does not use postgres:// or postgresql:// scheme. Skipping invalid connection string.');
+    return;
   }
 
   const parsed = new URL(connectionString);
@@ -145,8 +177,9 @@ export function updateDatabaseConfig(connectionString: string): void {
     password: decodeURIComponent(parsed.password),
     dialectOptions: {
       connectTimeout: 5000,
-      ...(isHyperdrive ? {} : { ssl: { require: true, rejectUnauthorized: false } }),
+      ...(isHyperdrive ? {} : (getSslConfig() ? { ssl: getSslConfig() } : {})),
     },
+
     pool: {
       max: 10,
       min: 0,

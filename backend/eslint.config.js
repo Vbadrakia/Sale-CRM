@@ -7,7 +7,7 @@ module.exports = tseslint.config(
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
-    ignores: ['dist/**', 'node_modules/**', 'src/migrations/**', 'src/config/sequelize-cli.js'],
+    ignores: ['dist/**', 'node_modules/**'],
   },
   {
     rules: {

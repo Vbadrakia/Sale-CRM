@@ -26,6 +26,7 @@ router.post('/import/confirm', spreadsheetUpload, asyncHandler(importController.
 router.get('/import/jobs', asyncHandler(importController.listImportJobs));
 router.get('/import/:id', asyncHandler(importController.getImportJob));
 router.get('/import/:id/errors', asyncHandler(importController.downloadImportErrors));
+router.post('/import/:id/cancel', asyncHandler(importController.cancelImportJob));
 
 router.get('/filters/options', asyncHandler(controller.leadFilterOptions));
 router.post('/check-duplicates', asyncHandler(controller.checkLeadDuplicates));

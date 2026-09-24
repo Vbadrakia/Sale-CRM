@@ -8,10 +8,8 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/server.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "lint": "eslint src --ext .ts",
+    "lint": "eslint src",
     "db:migrate": "node ../scripts/db-migrate.cjs",
-    "db:migrate:undo": "sequelize-cli db:migrate:undo",
-    "db:migrate:undo:all": "sequelize-cli db:migrate:undo:all",
     "db:seed": "node ../scripts/db-seed.cjs",
     "test": "tsx src/tests/run.ts",
     "doctor": "tsx src/utils/doctor.ts",
@@ -35,7 +33,7 @@
     "pg": "^8.23.0",
     "pg-hstore": "^2.3.4",
     "sequelize": "6.37.8",
-    "xlsx": "^0.18.5",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
     "zod": "^3.23.8"
   },
   "devDependencies": {
@@ -49,7 +47,6 @@
     "@types/node": "^20.14.10",
     "@types/nodemailer": "^6.4.15",
     "@types/pg": "^8.23.1",
-    "sequelize-cli": "^6.6.2",
     "tsx": "^4.16.2",
     "typescript": "^5.5.3"
   }

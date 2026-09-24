@@ -201,6 +201,45 @@ export async function confirmImport(req: Request, res: Response) {
     throw err;
   }
 
+  // Execute processing asynchronously in background batches
+  const processingPromise = processImportJobAsync({
+    jobId: job.id,
+    fileName,
+    normalized,
+    inFileDuplicates,
+    duplicateStrategy,
+    assignedBdeId,
+    user,
+  });
+
+  // In test environment or if client explicitly requests synchronous processing, await completion
+  if (process.env.NODE_ENV === 'test' || req.headers['x-sync-import'] === 'true') {
+    await processingPromise;
+    await job.reload();
+    return sendCreated(res, job, `Import finished: ${job.importedRows} leads created`);
+  }
+
+  // Production: Return immediately so HTTP request never times out
+  return sendCreated(res, job, 'Import job started. Processing in background.');
+}
+
+export async function processImportJobAsync({
+  jobId,
+  fileName,
+  normalized,
+  inFileDuplicates,
+  duplicateStrategy,
+  assignedBdeId,
+  user,
+}: {
+  jobId: number;
+  fileName: string;
+  normalized: NormalizedRow[];
+  inFileDuplicates: Map<number, string>;
+  duplicateStrategy: 'SKIP' | 'IMPORT';
+  assignedBdeId: number | null;
+  user: User;
+}): Promise<void> {
   let validRows = 0;
   let invalidRows = 0;
   let duplicateRows = 0;
@@ -208,18 +247,26 @@ export async function confirmImport(req: Request, res: Response) {
   let skippedRows = 0;
   const failures: { rowNumber: number; reason: string; rowData: Record<string, unknown> }[] = [];
 
+  const job = await ImportJob.findByPk(jobId);
+  if (!job) return;
+
   try {
-    // Single batch lookup map for the whole file
     const lookupMap = await buildExistingLeadsLookupMap(
       normalized.map((r) => r.data),
       leadScopeWhere(user),
     );
 
     const decoratedRows = normalized.map((row) => decorateRowFast(row, inFileDuplicates, lookupMap));
+    const BATCH_SIZE = 50;
 
-    // Process in batches of 100
-    const BATCH_SIZE = 100;
     for (let i = 0; i < decoratedRows.length; i += BATCH_SIZE) {
+      // Check for cancellation before processing each batch
+      const currentStatus = await ImportJob.findByPk(jobId, { attributes: ['status'] });
+      if (currentStatus?.status === 'CANCELLED') {
+        console.log(`[import] Job ${jobId} was cancelled by user.`);
+        return;
+      }
+
       const batch = decoratedRows.slice(i, i + BATCH_SIZE);
 
       for (const decorated of batch) {
@@ -291,6 +338,17 @@ export async function confirmImport(req: Request, res: Response) {
           });
         }
       }
+
+      // Save incremental progress after each batch
+      job.importedRows = importedRows;
+      job.skippedRows = skippedRows;
+      job.validRows = validRows;
+      job.invalidRows = invalidRows;
+      job.duplicateRows = duplicateRows;
+      await job.save().catch(() => undefined);
+
+      // Yield event loop between batches so workers/servers stay responsive
+      await new Promise((resolve) => setTimeout(resolve, 0));
     }
 
     if (failures.length) {
@@ -317,20 +375,29 @@ export async function confirmImport(req: Request, res: Response) {
         entityId: job.id,
       });
     }
-
-    return sendCreated(res, job, `Import finished: ${importedRows} leads created`);
   } catch (sysErr) {
-    const parentMsg = (sysErr as { parent?: { message?: string } })?.parent?.message || '';
-    const origMsg = (sysErr as { original?: { message?: string } })?.original?.message || '';
-    const msg = (sysErr as Error)?.message || String(sysErr);
-    const errDetail = `MSG: ${msg} | ORIG: ${origMsg} | PARENT: ${parentMsg}`;
-    console.error('::error title=Import Error Details::' + errDetail);
-    console.error('[IMPORT] Fatal error during import job execution:', errDetail, (sysErr as Error)?.stack);
+    console.error(`[IMPORT] Fatal error during import job ${job.id}:`, sysErr);
     job.status = 'FAILED';
-    job.errorMessage = `Import processing failed: ${errDetail.slice(0, 300)}`;
+    job.errorMessage = 'Import processing encountered a failure';
     await job.save().catch(() => undefined);
-    throw ApiError.database(`Import processing failed: ${errDetail.slice(0, 300)}`, 'DATABASE_ERROR');
   }
+}
+
+export async function cancelImportJob(req: Request, res: Response) {
+  const user = currentUser(req);
+  const job = await ImportJob.findByPk(Number(req.params.id));
+  if (!job || (user.role !== 'ADMIN' && job.createdById !== user.id)) {
+    throw ApiError.notFound('Import job not found');
+  }
+
+  if (job.status !== 'PENDING' && job.status !== 'PROCESSING') {
+    throw ApiError.badRequest(`Cannot cancel an import job with status ${job.status}`);
+  }
+
+  job.status = 'CANCELLED';
+  await job.save();
+
+  return sendSuccess(res, job, 'Import job cancelled');
 }
 
 export async function listImportJobs(req: Request, res: Response) {

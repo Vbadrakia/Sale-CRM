@@ -140,7 +140,7 @@ export interface ImportJob {
   id: number;
   createdById: number | null;
   fileName: string;
-  status: 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
+  status: 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'COMPLETED_WITH_ERRORS' | 'FAILED' | 'CANCELLED';
   totalRows: number;
   validRows: number;
   invalidRows: number;

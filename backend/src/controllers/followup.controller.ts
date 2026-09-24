@@ -162,14 +162,15 @@ export async function createFollowUp(req: Request, res: Response) {
 
   const lead = await getAccessibleLead(body.leadId, user);
 
-  // Validate BDE assignment
-  let assignedToId = lead.assignedBdeId ?? user.id;
-  if (user.role === 'ADMIN' && body.assignedToId) {
+  // MODEL A: Follow-up assignee must strictly match the lead's owner
+  let assignedToId = lead.assignedBdeId;
+  if (user.role === 'ADMIN' && body.assignedToId !== undefined && body.assignedToId !== null) {
+    if (lead.assignedBdeId && body.assignedToId !== lead.assignedBdeId) {
+      throw ApiError.badRequest('Follow-up assignee must match the lead owner. Reassign the lead if you wish to change ownership.');
+    }
     const target = await User.findOne({ where: { id: body.assignedToId, role: 'BDE', isActive: true } });
     if (!target) throw ApiError.badRequest('Selected user must be a valid, active BDE');
     assignedToId = target.id;
-  } else if (user.role !== 'ADMIN') {
-    assignedToId = user.id;
   }
 
   const dueAt = combineDueAt(body.dueDate, body.dueTime);
@@ -226,12 +227,17 @@ export async function updateFollowUp(req: Request, res: Response) {
   }
   if (body.assignedToId !== undefined) {
     if (user.role !== 'ADMIN') throw ApiError.forbidden('Only an admin can reassign follow-ups');
+    const lead = await Lead.findByPk(followUp.leadId);
+    if (lead && lead.assignedBdeId && body.assignedToId !== lead.assignedBdeId) {
+      throw ApiError.badRequest('Follow-up assignee must match the lead owner. Reassign the lead if you wish to change ownership.');
+    }
     if (body.assignedToId !== null) {
       const target = await User.findOne({ where: { id: body.assignedToId, role: 'BDE', isActive: true } });
       if (!target) throw ApiError.badRequest('Selected user must be a valid, active BDE');
     }
     followUp.assignedToId = body.assignedToId;
   }
+
 
   await followUp.save();
   await recalculateLeadNextFollowUp(followUp.leadId);
@@ -293,3 +299,23 @@ export async function cancelFollowUp(req: Request, res: Response) {
 
   return sendSuccess(res, followUp, 'Follow-up cancelled');
 }
+
+export async function deleteFollowUp(req: Request, res: Response) {
+  const followUp = await getAccessibleFollowUp(Number(req.params.id), req);
+  const leadId = followUp.leadId;
+  const user = currentUser(req);
+
+  await followUp.destroy();
+  await recalculateLeadNextFollowUp(leadId);
+
+  await logActivity({
+    leadId,
+    userId: user.id,
+    activityType: 'FOLLOWUP_CANCELLED',
+    description: `Follow-up deleted: ${followUp.title}`,
+    metadata: { followUpId: followUp.id },
+  });
+
+  return sendSuccess(res, { id: followUp.id }, 'Follow-up deleted');
+}
+

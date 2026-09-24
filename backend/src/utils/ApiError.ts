@@ -72,7 +72,7 @@ export class ApiError extends Error {
     return new ApiError(500, message, code);
   }
 
-  static database(message = 'Database operation failed', code = 'DATABASE_ERROR') {
-    return new ApiError(500, message, code);
+  static database(message = 'Database operation failed', code = 'DATABASE_ERROR', statusCode = 503) {
+    return new ApiError(statusCode, message, code);
   }
 }
