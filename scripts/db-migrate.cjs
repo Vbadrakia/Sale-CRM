@@ -80,15 +80,22 @@ async function migrate() {
       const filePath = path.join(migrationsDir, file);
       const sql = fs.readFileSync(filePath, 'utf8');
 
-      await client.query('BEGIN');
+      const isTransactional = !(sql.includes('ALTER TYPE') && sql.includes('ADD VALUE'));
+      if (isTransactional) {
+        await client.query('BEGIN');
+      }
       try {
         await client.query(sql);
         await client.query('INSERT INTO schema_migrations (version) VALUES ($1)', [file]);
-        await client.query('COMMIT');
+        if (isTransactional) {
+          await client.query('COMMIT');
+        }
         console.log(`[db-migrate] Applied ${file} successfully.`);
         appliedCount++;
       } catch (migrationErr) {
-        await client.query('ROLLBACK');
+        if (isTransactional) {
+          await client.query('ROLLBACK');
+        }
         console.error(`[db-migrate] Migration failed in ${file}:`, migrationErr.message);
         throw migrationErr;
       }

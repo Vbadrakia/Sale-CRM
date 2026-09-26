@@ -209,11 +209,13 @@ export async function updateProfile(req: Request, res: Response) {
 }
 
 export async function me(req: Request, res: Response) {
-  return sendSuccess(res, toPublicUser(currentUser(req)), 'OK');
+  const user = currentUser(req);
+  return sendSuccess(res, toPublicUser(user), 'OK');
 }
 
-export async function logout(_req: Request, res: Response) {
-  // JWTs are stateless; the client discards the token. Endpoint exists for
-  // symmetry and future token-revocation support.
+export async function logout(req: Request, res: Response) {
+  const user = currentUser(req);
+  user.tokenVersion = (Number(user.tokenVersion) || 1) + 1;
+  await user.save();
   return sendSuccess(res, { loggedOut: true }, 'Signed out');
 }

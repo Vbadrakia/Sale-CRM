@@ -21,7 +21,7 @@ router.post('/verify-otp', otpLimiter, validateBody(verifyOtpSchema), asyncHandl
 router.post('/resend-otp', otpLimiter, validateBody(resendOtpSchema), asyncHandler(controller.resendOtp));
 router.post('/forgot-password', passwordResetLimiter, validateBody(forgotPasswordSchema), asyncHandler(controller.forgotPassword));
 router.post('/reset-password', passwordResetLimiter, validateBody(resetPasswordSchema), asyncHandler(controller.resetPassword));
-router.post('/logout', asyncHandler(controller.logout));
+router.post('/logout', authenticate, asyncHandler(controller.logout));
 
 router.get('/me', authenticate, asyncHandler(controller.me));
 router.patch('/me', authenticate, validateBody(updateProfileSchema), asyncHandler(controller.updateProfile));

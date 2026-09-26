@@ -75,13 +75,20 @@ async function initializeWorkerConfig(env: Env): Promise<void> {
   isWorkerConfigInitialized = true;
 
   // Best-effort connectivity verification (non-blocking)
-  try {
-    await assertDatabaseConnection();
-    console.log('[worker-db] Database connection verified');
-  } catch (err) {
-    // Log but don't throw — Express will handle DB errors per-request
-    console.warn('[worker-db] Initial database connection check failed (will retry on queries):', err instanceof Error ? err.message : err);
-  }
+  assertDatabaseConnection()
+    .then(() => console.log('[worker-db] Database connection verified'))
+    .catch((err) => {
+      console.warn('[worker-db] Initial database connection check failed:', err instanceof Error ? err.message : err);
+    });
+}
+
+if (typeof process !== 'undefined') {
+  process.on('unhandledRejection', (reason) => {
+    console.error('[worker-process] Unhandled Rejection:', reason);
+  });
+  process.on('uncaughtException', (err) => {
+    console.error('[worker-process] Uncaught Exception:', err);
+  });
 }
 
 async function getWorkerHttpHandler(env: Env) {
@@ -89,8 +96,14 @@ async function getWorkerHttpHandler(env: Env) {
   if (!httpHandlerInstance) {
     const app = createApp();
     const server = createServer(app);
-    server.listen(8080);
-    httpHandlerInstance = httpServerHandler({ port: 8080 });
+    server.on('error', (err) => console.error('[node:http server error]', err));
+    server.on('clientError', (err, socket) => {
+      console.error('[node:http client error]', err);
+      if (socket && !socket.destroyed) {
+        socket.end('HTTP/1.1 400 Bad Request\r\n\r\n');
+      }
+    });
+    httpHandlerInstance = httpServerHandler(server);
   }
   return httpHandlerInstance as { fetch: (req: Request, env: Env, ctx: ExecutionContext) => Promise<Response> };
 }
@@ -122,8 +135,6 @@ export default {
     }
 
     try {
-      await initializeWorkerConfig(env);
-
       // 1. Route API requests to Express handler initialized with env bindings
       if (url.pathname.startsWith('/api')) {
         const handler = await getWorkerHttpHandler(env);

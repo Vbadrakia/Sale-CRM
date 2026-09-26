@@ -15,6 +15,9 @@ export function notFoundHandler(req: Request, res: Response) {
 }
 
 export function errorHandler(err: unknown, req: Request, res: Response, _next: NextFunction) {
+  if (res.headersSent) {
+    return _next(err as Error);
+  }
   let statusCode = 500;
   let code = 'SERVER_ERROR';
   let message = 'Something went wrong';

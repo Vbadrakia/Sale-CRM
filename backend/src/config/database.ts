@@ -24,13 +24,20 @@ const isWorkerRuntime =
   typeof (globalThis as unknown as { WebSocketPair?: unknown }).WebSocketPair !== 'undefined' ||
   rawDbUrl.includes('hyperdrive');
 
-const validateWorkerConnection = (client: unknown): boolean => {
-  if (!client) return false;
-  const c = client as { _ending?: boolean; ended?: boolean; _closed?: boolean; stream?: { destroyed?: boolean; closed?: boolean; writable?: boolean } };
-  if (c._ending || c.ended || c._closed) return false;
-  if (c.stream) {
-    if (c.stream.destroyed || c.stream.closed || c.stream.writable === false) return false;
-  }
+const validateWorkerConnection = (_client: unknown): boolean => {
+  if (isWorkerRuntime) return false;
+  if (!_client) return false;
+  const c = _client as {
+    _ending?: boolean;
+    _ended?: boolean;
+    _connected?: boolean;
+    stream?: { destroyed?: boolean };
+    connection?: { stream?: { destroyed?: boolean } };
+  };
+  if (c._ending || c._ended) return false;
+  if (c._connected === false) return false;
+  const stream = c.stream || c.connection?.stream;
+  if (stream && stream.destroyed) return false;
   return true;
 };
 
@@ -55,16 +62,17 @@ export const sequelize = new Sequelize(dbUrl, {
     underscored: true,
   },
   pool: {
-    max: isWorkerRuntime ? 10 : (process.env.NODE_ENV === 'test' ? 100 : env.db.poolMax),
-    min: isWorkerRuntime ? 0 : env.db.poolMin,
-    idle: isWorkerRuntime ? 1000 : env.db.poolIdle,
-    acquire: isWorkerRuntime ? 15000 : env.db.poolAcquire,
-    evict: 50,
-    maxUses: isWorkerRuntime ? 100 : Infinity,
+    max: isWorkerRuntime ? 5 : (process.env.NODE_ENV === 'test' ? 100 : env.db.poolMax),
+    min: 0,
+    idle: isWorkerRuntime ? 10000 : env.db.poolIdle,
+    acquire: isWorkerRuntime ? 10000 : env.db.poolAcquire,
+    evict: 1000,
+    maxUses: Infinity,
     validate: validateWorkerConnection,
   },
   dialectOptions: {
     connectTimeout: 5000,
+    statement_timeout: 15000,
     ...(isTestOrSslDisabled || isWorkerRuntime
       ? {}
       : (() => {
@@ -139,6 +147,15 @@ sequelize.addHook('beforeConnect', (config: unknown) => {
   }
 });
 
+sequelize.addHook('afterConnect', (connection: unknown) => {
+  const client = connection as { on?: (event: string, handler: (err: unknown) => void) => void };
+  if (typeof client?.on === 'function') {
+    client.on('error', (err: unknown) => {
+      console.warn('[worker-db-pg] Connection error caught safely:', err instanceof Error ? err.message : err);
+    });
+  }
+});
+
 export function updateDatabaseConfig(connectionString: string): void {
   if (!connectionString) {
     throw new Error('[worker-db] Cannot initialize database with empty connection string!');
@@ -177,16 +194,17 @@ export function updateDatabaseConfig(connectionString: string): void {
     password: decodeURIComponent(parsed.password),
     dialectOptions: {
       connectTimeout: 5000,
+      statement_timeout: 15000,
       ...(isHyperdrive ? {} : (getSslConfig() ? { ssl: getSslConfig() } : {})),
     },
 
     pool: {
-      max: 10,
+      max: 5,
       min: 0,
-      idle: 1000,
-      acquire: 15000,
-      evict: 50,
-      maxUses: 100,
+      idle: 10000,
+      acquire: 10000,
+      evict: 1000,
+      maxUses: Infinity,
       validate: validateWorkerConnection,
     },
   };

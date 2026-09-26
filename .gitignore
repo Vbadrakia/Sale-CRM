@@ -43,3 +43,4 @@ tmp/
 temp/
 coverage/
 .wrangler/
+scripts/backups/

@@ -11,6 +11,8 @@ not_found_handling = "single-page-application"
 [[hyperdrive]]
 binding = "HYPERDRIVE"
 id = "053c2b3f72514f95b5ab07f3ba6d6c6c"
+# NOTE: Hyperdrive query caching is disabled via `wrangler hyperdrive update` CLI
+# to ensure token revocation (tokenVersion checks) work immediately.
 
 [triggers]
 crons = ["*/10 * * * *"]

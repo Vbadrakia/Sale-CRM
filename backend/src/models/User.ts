@@ -25,18 +25,18 @@ export function fullName(user: User): string {
 User.init(
   {
     id: { type: DataTypes.INTEGER.UNSIGNED, autoIncrement: true, primaryKey: true },
-    firstName: { type: DataTypes.STRING(80), allowNull: false },
-    lastName: { type: DataTypes.STRING(80), allowNull: false },
+    firstName: { type: DataTypes.STRING(80), allowNull: false, field: 'first_name' },
+    lastName: { type: DataTypes.STRING(80), allowNull: false, field: 'last_name' },
     email: { type: DataTypes.STRING(190), allowNull: false, unique: true },
     phone: { type: DataTypes.STRING(30), allowNull: true },
-    passwordHash: { type: DataTypes.STRING(255), allowNull: false },
+    passwordHash: { type: DataTypes.STRING(255), allowNull: false, field: 'password_hash' },
     role: { type: DataTypes.ENUM('ADMIN', 'BDE'), allowNull: false, defaultValue: 'BDE' },
-    isActive: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
-    emailVerified: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
-    tokenVersion: { type: DataTypes.INTEGER.UNSIGNED, allowNull: false, defaultValue: 1 },
-    lastLoginAt: { type: DataTypes.DATE, allowNull: true },
-    createdAt: DataTypes.DATE,
-    updatedAt: DataTypes.DATE,
+    isActive: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true, field: 'is_active' },
+    emailVerified: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false, field: 'email_verified' },
+    tokenVersion: { type: DataTypes.INTEGER.UNSIGNED, allowNull: false, defaultValue: 1, field: 'token_version' },
+    lastLoginAt: { type: DataTypes.DATE, allowNull: true, field: 'last_login_at' },
+    createdAt: { type: DataTypes.DATE, field: 'created_at' },
+    updatedAt: { type: DataTypes.DATE, field: 'updated_at' },
   },
   {
     sequelize,
@@ -50,20 +50,22 @@ User.init(
   },
 );
 
-/** Shape returned by the API — never includes the password hash. */
 export function toPublicUser(user: User) {
+  const u = (typeof user.get === 'function' ? user.get({ plain: true }) : user) as Record<string, unknown>;
+  const fName = String(u.firstName || u.first_name || '');
+  const lName = String(u.lastName || u.last_name || '');
   return {
-    id: user.id,
-    firstName: user.firstName,
-    lastName: user.lastName,
-    fullName: `${user.firstName} ${user.lastName}`.trim(),
-    email: user.email,
-    phone: user.phone,
-    role: user.role,
-    isActive: user.isActive,
-    emailVerified: user.emailVerified,
-    lastLoginAt: user.lastLoginAt,
-    createdAt: user.createdAt,
-    updatedAt: user.updatedAt,
+    id: u.id,
+    firstName: fName,
+    lastName: lName,
+    fullName: `${fName} ${lName}`.trim(),
+    email: u.email,
+    phone: u.phone ?? null,
+    role: u.role,
+    isActive: Boolean(u.isActive ?? u.is_active ?? true),
+    emailVerified: Boolean(u.emailVerified ?? u.email_verified ?? false),
+    lastLoginAt: u.lastLoginAt || u.last_login_at || null,
+    createdAt: u.createdAt || u.created_at,
+    updatedAt: u.updatedAt || u.updated_at,
   };
 }

@@ -6,10 +6,10 @@
 
 INSERT INTO users (first_name, last_name, email, phone, password_hash, role, is_active, email_verified)
 VALUES 
-('Ava', 'Admin', 'admin@crm.local', '+911234567890', '$2a$12$zVzdah49fe3VoWNOkKuZV.fnuZbT3XZ5.bshAdsfJNH29wS4XUY/y', 'ADMIN', true, true),
-('Ravi', 'Kumar', 'ravi@crm.local', '+919876543210', '$2a$12$zVzdah49fe3VoWNOkKuZV.fnuZbT3XZ5.bshAdsfJNH29wS4XUY/y', 'BDE', true, true),
-('Neha', 'Patel', 'neha@crm.local', '+919876543211', '$2a$12$zVzdah49fe3VoWNOkKuZV.fnuZbT3XZ5.bshAdsfJNH29wS4XUY/y', 'BDE', true, true),
-('Sam', 'Okafor', 'sam@crm.local', '+919876543212', '$2a$12$zVzdah49fe3VoWNOkKuZV.fnuZbT3XZ5.bshAdsfJNH29wS4XUY/y', 'BDE', true, true)
+('Ava', 'Admin', 'admin@crm.local', '+911234567890', '$2a$06$XRMS.CDW.UWH22s5nKHVbOcypjtSybbb/z0P8uJiXpsT7OXiNMMXe', 'ADMIN', true, true),
+('Ravi', 'Kumar', 'ravi@crm.local', '+919876543210', '$2a$06$XRMS.CDW.UWH22s5nKHVbOcypjtSybbb/z0P8uJiXpsT7OXiNMMXe', 'BDE', true, true),
+('Neha', 'Patel', 'neha@crm.local', '+919876543211', '$2a$06$XRMS.CDW.UWH22s5nKHVbOcypjtSybbb/z0P8uJiXpsT7OXiNMMXe', 'BDE', true, true),
+('Sam', 'Okafor', 'sam@crm.local', '+919876543212', '$2a$06$XRMS.CDW.UWH22s5nKHVbOcypjtSybbb/z0P8uJiXpsT7OXiNMMXe', 'BDE', true, true)
 ON CONFLICT (email) DO NOTHING;
 
 -- Sample Leads

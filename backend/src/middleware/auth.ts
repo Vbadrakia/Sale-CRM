@@ -18,63 +18,70 @@ declare global {
  * re-read from the database — never trusted from the client.
  */
 export async function authenticate(req: Request, _res: Response, next: NextFunction) {
-  const header = req.headers.authorization;
-  if (!header || !header.startsWith('Bearer ')) {
-    return next(ApiError.unauthorized('Authentication required', 'AUTH_REQUIRED'));
-  }
-
-  const token = header.slice(7).trim();
-  let payload: AuthUserPayload;
-
-  // Step 1: Verify JWT signature & expiration
   try {
-    payload = verifyAuthToken(token);
-  } catch (jwtErr: unknown) {
-    if (jwtErr instanceof Error && jwtErr.name === 'TokenExpiredError') {
-      console.warn(`[AUTH] auth.session_invalidated reason=TOKEN_EXPIRED reqId=${req.id || 'none'}`);
-      return next(ApiError.unauthorized('Session has expired', 'AUTH_TOKEN_EXPIRED'));
+    const header = req.headers.authorization;
+    if (!header || !header.startsWith('Bearer ')) {
+      return next(ApiError.unauthorized('Authentication required', 'AUTH_REQUIRED'));
     }
-    console.warn(`[AUTH] auth.session_invalidated reason=INVALID_TOKEN reqId=${req.id || 'none'}`);
-    return next(ApiError.unauthorized('Invalid authentication token', 'AUTH_INVALID_TOKEN'));
-  }
 
-  // Step 2: Query User record from database (FAIL CLOSED: never construct fallback from JWT claims)
-  let user: User | null;
-  try {
-    user = await User.findByPk(payload.id, { timeout: 3000 } as unknown as Parameters<typeof User.findByPk>[1]);
-  } catch (dbErr: unknown) {
-    const errMsg = dbErr instanceof Error ? dbErr.message : String(dbErr);
-    console.error(`[AUTH] auth.session_check_failed reason=DATABASE_UNAVAILABLE userId=${payload.id} reqId=${req.id || 'none'} err=${errMsg}`);
-    return next(ApiError.database('Authentication service temporarily unavailable', 'DATABASE_UNAVAILABLE'));
-  }
+    const token = header.slice(7).trim();
+    let payload: AuthUserPayload;
 
-  // Step 3: Validate user existence and status
-  if (!user) {
-    console.warn(`[AUTH] auth.session_invalidated reason=ACCOUNT_NOT_FOUND userId=${payload.id} reqId=${req.id || 'none'}`);
-    return next(ApiError.unauthorized('Account no longer exists', 'ACCOUNT_NOT_FOUND'));
-  }
+    // Step 1: Verify JWT signature & expiration
+    try {
+      payload = verifyAuthToken(token);
+    } catch (jwtErr: unknown) {
+      if (jwtErr instanceof Error && jwtErr.name === 'TokenExpiredError') {
+        console.warn(`[AUTH] auth.session_invalidated reason=TOKEN_EXPIRED reqId=${req.id || 'none'}`);
+        return next(ApiError.unauthorized('Session has expired', 'AUTH_TOKEN_EXPIRED'));
+      }
+      console.warn(`[AUTH] auth.session_invalidated reason=INVALID_TOKEN reqId=${req.id || 'none'}`);
+      return next(ApiError.unauthorized('Invalid authentication token', 'AUTH_INVALID_TOKEN'));
+    }
 
-  if (
-    payload.tokenVersion !== undefined &&
-    user.tokenVersion !== undefined &&
-    payload.tokenVersion !== user.tokenVersion
-  ) {
-    console.warn(`[AUTH] auth.session_invalidated reason=TOKEN_REVOKED userId=${user.id} reqId=${req.id || 'none'}`);
-    return next(ApiError.unauthorized('Session has expired due to password or security update', 'AUTH_TOKEN_EXPIRED'));
-  }
+    // Step 2: Query User record from database (FAIL CLOSED: never construct fallback from JWT claims)
+    let user: User | null;
+    try {
+      const targetId = Number(payload.id);
+      user = await User.findByPk(isNaN(targetId) ? payload.id : targetId);
+    } catch (dbErr: unknown) {
+      const errMsg = dbErr instanceof Error ? dbErr.message : String(dbErr);
+      console.error(`[AUTH] auth.session_check_failed reason=DATABASE_UNAVAILABLE userId=${payload.id} reqId=${req.id || 'none'} err=${errMsg}`);
+      return next(ApiError.database('Authentication service temporarily unavailable', 'DATABASE_UNAVAILABLE'));
+    }
 
-  if (!user.isActive) {
-    console.warn(`[AUTH] auth.session_invalidated reason=ACCOUNT_DISABLED userId=${user.id} reqId=${req.id || 'none'}`);
-    return next(ApiError.forbidden('This account is disabled', 'ACCOUNT_DISABLED'));
-  }
+    // Step 3: Validate user existence and status
+    if (!user) {
+      console.warn(`[AUTH] auth.session_invalidated reason=ACCOUNT_NOT_FOUND userId=${payload.id} reqId=${req.id || 'none'}`);
+      return next(ApiError.unauthorized('Account no longer exists', 'ACCOUNT_NOT_FOUND'));
+    }
 
-  if (!user.emailVerified) {
-    console.warn(`[AUTH] auth.session_invalidated reason=ACCOUNT_UNVERIFIED userId=${user.id} reqId=${req.id || 'none'}`);
-    return next(ApiError.forbidden('Account is not verified', 'ACCOUNT_UNVERIFIED'));
-  }
+    const dbTokenVersion = user.tokenVersion ?? (user.dataValues as unknown as { token_version?: number })?.token_version;
+    if (
+      payload.tokenVersion !== undefined &&
+      dbTokenVersion !== undefined &&
+      Number(payload.tokenVersion) !== Number(dbTokenVersion)
+    ) {
+      console.warn(`[AUTH] auth.session_invalidated reason=TOKEN_REVOKED userId=${user.id} reqId=${req.id || 'none'}`);
+      return next(ApiError.unauthorized('Session has been revoked. Please sign in again.', 'AUTH_TOKEN_REVOKED'));
+    }
 
-  req.user = user;
-  next();
+    if (!user.isActive) {
+      console.warn(`[AUTH] auth.session_invalidated reason=ACCOUNT_DISABLED userId=${user.id} reqId=${req.id || 'none'}`);
+      return next(ApiError.forbidden('This account is disabled', 'ACCOUNT_DISABLED'));
+    }
+
+    if (!user.emailVerified) {
+      console.warn(`[AUTH] auth.session_invalidated reason=ACCOUNT_UNVERIFIED userId=${user.id} reqId=${req.id || 'none'}`);
+      return next(ApiError.forbidden('Account is not verified', 'ACCOUNT_UNVERIFIED'));
+    }
+
+    req.user = user;
+    return next();
+  } catch (outerErr: unknown) {
+    console.error(`[AUTH] auth.unexpected_error reqId=${req.id || 'none'} err=`, outerErr);
+    return next(outerErr);
+  }
 }
 
 export function requireRole(...roles: UserRole[]) {

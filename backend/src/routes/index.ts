@@ -8,6 +8,12 @@ import notificationRoutes from './notification.routes';
 import dashboardRoutes from './dashboard.routes';
 import { asyncHandler } from '../utils/asyncHandler';
 import { health } from '../controllers/dashboard.controller';
+import {
+  getDatabaseBackup,
+  getMigrationStatus,
+  runMigrations,
+  seedInitialUsers,
+} from '../controllers/system.controller';
 
 const apiRouter = Router();
 
@@ -21,6 +27,12 @@ apiRouter.use((req, _res, next) => {
 apiRouter.get('/health', asyncHandler(health));
 apiRouter.get('/ping', (_req, res) => { res.json({ success: true, message: 'pong', time: Date.now() }); });
 apiRouter.post('/ping', (req, res) => { res.json({ success: true, message: 'pong', echo: req.body }); });
+
+// System migration & backup endpoints (secured via X-Migration-Key or Admin session)
+apiRouter.get('/system/db-backup', asyncHandler(getDatabaseBackup));
+apiRouter.get('/system/migration-status', asyncHandler(getMigrationStatus));
+apiRouter.post('/system/migrate', asyncHandler(runMigrations));
+apiRouter.post('/system/seed-users', asyncHandler(seedInitialUsers));
 
 // Module route handlers
 apiRouter.use('/auth', authRoutes);

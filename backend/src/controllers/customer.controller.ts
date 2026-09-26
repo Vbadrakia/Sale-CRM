@@ -2,6 +2,7 @@ import { Op, Transaction, WhereOptions, QueryTypes } from 'sequelize';
 import { Request, Response } from 'express';
 import { z } from 'zod';
 import { Customer, Lead, User } from '../models';
+import { sequelize } from '../config/database';
 import { ApiError } from '../utils/ApiError';
 import { sendCreated, sendPaginated, sendSuccess } from '../utils/apiResponse';
 import { buildPaginationMeta, parsePagination } from '../utils/pagination';
@@ -18,7 +19,7 @@ async function generateCustomerCode(transaction?: Transaction): Promise<string> 
   const year = new Date().getUTCFullYear();
   const prefix = `CU-${year}-`;
   try {
-    const results = await Customer.sequelize!.query<{ nextval: string | number }>(
+    const results = await sequelize.query<{ nextval: string | number }>(
       `SELECT nextval('customer_code_seq') AS nextval`,
       { type: QueryTypes.SELECT, transaction },
     );
