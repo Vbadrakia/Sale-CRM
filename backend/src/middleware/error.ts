@@ -61,9 +61,9 @@ export function errorHandler(err: unknown, req: Request, res: Response, _next: N
     console.error(`[SERVER_ERROR] [reqId=${req.id || 'none'}] status=${statusCode} code=${code}`, err);
   }
 
-  // In production, never leak internal error details, SQL, paths, or stacks
+  // In production, never leak internal error details, SQL, paths, or stacks, but preserve ApiError messages
   if (env.isProduction) {
-    if (statusCode >= 500) {
+    if (statusCode >= 500 && !(err instanceof ApiError)) {
       if (code === 'DATABASE_ERROR' || code === 'DATABASE_UNAVAILABLE') {
         message = 'Database service temporarily unavailable';
       } else {
