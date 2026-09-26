@@ -17,5 +17,7 @@ crons = ["*/10 * * * *"]
 
 [vars]
 NODE_ENV = "production"
+JWT_SECRET = "Sg/JxS3kpPIEveCB/AeT+e7gLObzX8032077uYsXeikWHKYm0RjiCjcOSk30kJ8NAsUMYrGyC52Yt2PIJAOnzQ=="
+DATABASE_URL = "postgres://postgres.ldoguxshqloenecefngs:Admin%40898004@aws-0-ap-south-1.pooler.supabase.com:6543/postgres"
 CORS_ORIGINS = "https://crm.vedantbadrakia07.workers.dev,https://sale-crm.vedantbadrakia07.workers.dev"
 FRONTEND_URL = "https://crm.vedantbadrakia07.workers.dev"

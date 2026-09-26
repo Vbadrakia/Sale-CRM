@@ -73,15 +73,11 @@ export const sequelize = new Sequelize(dbUrl, {
   dialectOptions: {
     connectTimeout: 5000,
     statement_timeout: 15000,
-    ...(isTestOrSslDisabled || isWorkerRuntime
+    ...(isTestOrSslDisabled
       ? {}
-      : (() => {
-          const ssl = getSslConfig();
-          return ssl ? { ssl } : {};
-        })()),
+      : { ssl: { require: true, rejectUnauthorized: false } }),
   },
 });
-
 
 interface ConnectionManagerPool {
   destroyAllNow?: () => Promise<void>;
@@ -138,12 +134,7 @@ sequelize.addHook('beforeConnect', (config: unknown) => {
     delete connConfig.ssl;
   } else {
     if (!connConfig.dialectOptions) connConfig.dialectOptions = {};
-    const ssl = getSslConfig();
-    if (ssl) {
-      connConfig.dialectOptions.ssl = ssl;
-    } else {
-      delete connConfig.dialectOptions.ssl;
-    }
+    connConfig.dialectOptions.ssl = { require: true, rejectUnauthorized: false };
   }
 });
 
@@ -195,7 +186,7 @@ export function updateDatabaseConfig(connectionString: string): void {
     dialectOptions: {
       connectTimeout: 5000,
       statement_timeout: 15000,
-      ...(isHyperdrive ? {} : (getSslConfig() ? { ssl: getSslConfig() } : {})),
+      ...(isHyperdrive ? {} : { ssl: { require: true, rejectUnauthorized: false } }),
     },
 
     pool: {
@@ -210,10 +201,16 @@ export function updateDatabaseConfig(connectionString: string): void {
   };
 
   Object.assign(sequelize.config, dbConfig);
-  const manager = (sequelize as unknown as { connectionManager?: ConnectionManagerInternal & { initPools?: () => void } }).connectionManager;
+  const seqAny = sequelize as unknown as { options?: Record<string, unknown>; connectionManager?: ConnectionManagerInternal & { initPools?: () => void } };
+  if (seqAny.options) {
+    Object.assign(seqAny.options, dbConfig);
+    seqAny.options.dialectOptions = Object.assign({}, dbConfig.dialectOptions as object);
+  }
+  const manager = seqAny.connectionManager;
   if (manager) {
     if (manager.config) {
       Object.assign(manager.config, dbConfig);
+      manager.config.dialectOptions = Object.assign({}, dbConfig.dialectOptions as object);
     }
     const poolObj = manager.pool as { destroyAllNow?: () => Promise<void> } | undefined;
     if (poolObj?.destroyAllNow) {
@@ -260,4 +257,3 @@ export async function diagnoseDatabaseConnection(connectionString: string): Prom
 export async function assertDatabaseConnection(): Promise<void> {
   await sequelize.authenticate();
 }
-
