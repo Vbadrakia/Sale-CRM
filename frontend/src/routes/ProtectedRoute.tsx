@@ -1,89 +1,29 @@
 import { Navigate, Outlet, useLocation } from 'react-router-dom';
 import { Loader2 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
-import { tokenStore } from '@/api/client';
 
 function FullScreenLoader() {
   return (
-    <div className="flex min-h-screen items-center justify-center">
+    <div className="flex min-h-screen items-center justify-center bg-gray-50">
       <Loader2 className="h-6 w-6 animate-spin text-brand-600" />
     </div>
   );
 }
 
-function ConnectionErrorView({
-  message,
-  onRetry,
-  onSignOut,
-}: {
-  message: string;
-  onRetry: () => void;
-  onSignOut: () => void;
-}) {
-  return (
-    <div className="flex min-h-screen flex-col items-center justify-center bg-gray-50 p-4">
-      <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-md border border-gray-200 text-center">
-        <h2 className="text-lg font-semibold text-gray-900 mb-2">Connection Issue</h2>
-        <p className="text-sm text-gray-600 mb-6">{message}</p>
-        <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
-          <button
-            onClick={onRetry}
-            className="w-full sm:w-auto inline-flex items-center justify-center rounded-lg bg-brand-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-brand-700 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-2 transition-colors"
-          >
-            Retry Connection
-          </button>
-          <button
-            onClick={onSignOut}
-            className="w-full sm:w-auto inline-flex items-center justify-center rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-2 transition-colors"
-          >
-            Clear Session / Login
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/** Blocks unauthenticated access. The backend enforces the same rules again. */
+/** Blocks unauthenticated access. Automatically redirects to /login. */
 export function ProtectedRoute() {
-  const { user, loading, sessionError, retrySession, signOut } = useAuth();
+  const { user, loading } = useAuth();
   const location = useLocation();
 
   if (loading) return <FullScreenLoader />;
-
-  if (!user && sessionError && tokenStore.get()) {
-    return (
-      <ConnectionErrorView
-        message={sessionError}
-        onRetry={() => void retrySession()}
-        onSignOut={() => {
-          tokenStore.clear();
-          signOut();
-        }}
-      />
-    );
-  }
-
   if (!user) return <Navigate to="/login" replace state={{ from: location.pathname }} />;
   return <Outlet />;
 }
 
 /** Admin-only section of the app. */
 export function AdminRoute() {
-  const { user, loading, sessionError, retrySession, signOut } = useAuth();
+  const { user, loading } = useAuth();
   if (loading) return <FullScreenLoader />;
-  if (!user && sessionError && tokenStore.get()) {
-    return (
-      <ConnectionErrorView
-        message={sessionError}
-        onRetry={() => void retrySession()}
-        onSignOut={() => {
-          tokenStore.clear();
-          signOut();
-        }}
-      />
-    );
-  }
   if (!user) return <Navigate to="/login" replace />;
   if (user.role !== 'ADMIN') return <Navigate to="/dashboard" replace />;
   return <Outlet />;

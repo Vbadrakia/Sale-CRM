@@ -74,7 +74,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       sessionInvalidatedRef.current = false;
 
       let attempt = 0;
-      const maxRetries = 2;
+      const maxRetries = 1;
 
       while (attempt <= maxRetries) {
         if (currentReqId !== authRequestIdRef.current) return;
@@ -93,23 +93,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           if (currentReqId !== authRequestIdRef.current) return;
 
           if (err instanceof ApiRequestError) {
-            // 1. Transient connection / 5xx / database / timeout error -> PRESERVE TOKEN
-            if (err.isNetworkOrServerError || err.code === 'DATABASE_ERROR' || err.code === 'SERVER_ERROR' || err.code === 'TIMEOUT') {
-              attempt += 1;
-              if (attempt <= maxRetries) {
-                await new Promise((resolve) => setTimeout(resolve, attempt * 1000));
-                continue;
-              }
-              console.warn(`[AUTH] Transient error during session check (status=${err.status}, code=${err.code}). Token preserved.`);
-              if (currentReqId === authRequestIdRef.current) {
-                setSessionState('TRANSIENT_ERROR');
-                setSessionError(err.message || 'Server connection lost. Retrying...');
-              }
-              return;
-            }
-
-            // 2. Confirmed session invalidation codes
-            if (err.code && AUTH_INVALIDATION_CODES.has(err.code)) {
+            // Unauthenticated / Forbidden -> Immediately purge token and redirect to login
+            if (err.status === 401 || err.status === 403 || (err.code && AUTH_INVALIDATION_CODES.has(err.code))) {
               let reason: SessionInvalidationReason = 'INVALID_TOKEN';
               if (err.code === 'AUTH_TOKEN_EXPIRED') reason = 'TOKEN_EXPIRED';
               else if (err.code === 'ACCOUNT_DISABLED') reason = 'ACCOUNT_DISABLED';
@@ -122,14 +107,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
           attempt += 1;
           if (attempt <= maxRetries) {
-            await new Promise((resolve) => setTimeout(resolve, attempt * 1000));
+            await new Promise((resolve) => setTimeout(resolve, 500));
           }
         }
       }
 
+      // If session check cannot authenticate after retries, invalidate session cleanly so user lands on /login
       if (currentReqId === authRequestIdRef.current) {
-        setSessionState('TRANSIENT_ERROR');
-        setSessionError('Temporary server issue. Retrying...');
+        invalidateSession('INVALID_TOKEN');
       }
     })();
 
