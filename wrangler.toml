@@ -1,4 +1,4 @@
-name = "sale-crm"
+name = "crm"
 main = "worker/index.ts"
 compatibility_date = "2026-08-04"
 compatibility_flags = ["nodejs_compat", "enable_nodejs_http_server_modules"]
@@ -11,13 +11,11 @@ not_found_handling = "single-page-application"
 [[hyperdrive]]
 binding = "HYPERDRIVE"
 id = "053c2b3f72514f95b5ab07f3ba6d6c6c"
-# NOTE: Hyperdrive query caching is disabled via `wrangler hyperdrive update` CLI
-# to ensure token revocation (tokenVersion checks) work immediately.
 
 [triggers]
 crons = ["*/10 * * * *"]
 
 [vars]
 NODE_ENV = "production"
-CORS_ORIGINS = "https://sale-crm.vedantbadrakia07.workers.dev"
-FRONTEND_URL = "https://sale-crm.vedantbadrakia07.workers.dev"
+CORS_ORIGINS = "https://crm.vedantbadrakia07.workers.dev,https://sale-crm.vedantbadrakia07.workers.dev"
+FRONTEND_URL = "https://crm.vedantbadrakia07.workers.dev"
