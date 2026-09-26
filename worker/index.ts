@@ -70,8 +70,6 @@ async function initializeWorkerConfig(env: Env): Promise<void> {
   }
 
   // 3. Mark config as initialized — DB config is now applied.
-  //    Don't block requests on DB health check; let Express handle
-  //    per-request DB errors with proper CORS and error formatting.
   isWorkerConfigInitialized = true;
 
   // Best-effort connectivity verification (non-blocking)
@@ -142,18 +140,20 @@ export default {
           return await handler.fetch(request, env, ctx);
         } catch (handlerErr: unknown) {
           console.error(`[Worker Express Handler Error] [reqId=${requestId}]:`, handlerErr);
-          const isProd = process.env.NODE_ENV === 'production';
           const errMsg = handlerErr instanceof Error ? handlerErr.message : String(handlerErr);
+          const lowerMsg = errMsg.toLowerCase();
+          const isDbErr = lowerMsg.includes('database') || lowerMsg.includes('connection') || lowerMsg.includes('hyperdrive') || lowerMsg.includes('etimedout') || lowerMsg.includes('password');
+
           return new Response(
             JSON.stringify({
               success: false,
-              code: 'SERVER_ERROR',
-              message: 'Internal server error',
-              ...(isProd ? {} : { details: errMsg }),
+              code: isDbErr ? 'DATABASE_ERROR' : 'SERVER_ERROR',
+              message: isDbErr ? 'Database connection unavailable. Please try again.' : 'Internal server error',
+              details: errMsg,
               requestId,
             }),
             {
-              status: 500,
+              status: isDbErr ? 503 : 500,
               headers: { 'Content-Type': 'application/json', 'x-request-id': requestId, ...corsHeaders },
             },
           );
@@ -168,16 +168,16 @@ export default {
       return new Response('Not Found', { status: 404 });
     } catch (err: unknown) {
       console.error(`[Worker Error] [reqId=${requestId}]:`, err);
-      const isProd = process.env.NODE_ENV === 'production';
       const errMsg = err instanceof Error ? err.message : String(err);
-      const isDbErr = errMsg.toLowerCase().includes('database') || errMsg.toLowerCase().includes('connection') || errMsg.toLowerCase().includes('hyperdrive');
+      const lowerMsg = errMsg.toLowerCase();
+      const isDbErr = lowerMsg.includes('database') || lowerMsg.includes('connection') || lowerMsg.includes('hyperdrive') || lowerMsg.includes('etimedout') || lowerMsg.includes('password');
 
       return new Response(
         JSON.stringify({
           success: false,
           code: isDbErr ? 'DATABASE_ERROR' : 'SERVER_ERROR',
           message: isDbErr ? 'Database connection unavailable. Please try again.' : 'Internal server error',
-          ...(isProd ? {} : { details: errMsg }),
+          details: errMsg,
           requestId,
         }),
         {
@@ -187,7 +187,6 @@ export default {
       );
     }
   },
-
 
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
     await initializeWorkerConfig(event ? env : env);
@@ -201,4 +200,3 @@ export default {
     }
   },
 };
-
