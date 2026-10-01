@@ -1,7 +1,8 @@
 import { Op, WhereOptions, fn, col, literal } from 'sequelize';
 import { Request, Response } from 'express';
 import { Customer, FollowUp, Lead, User, sequelize } from '../models';
-import { withDbRetry } from '../config/database';
+import { withDbRetry, isTlsVerificationError, TLS_ACTIONABLE_ERROR } from '../config/database';
+import { env } from '../config/env';
 import { sendSuccess } from '../utils/apiResponse';
 import { currentUser } from '../middleware/auth';
 import { leadScopeWhere } from '../services/lead.service';
@@ -594,19 +595,30 @@ export async function followUpTrend(req: Request, res: Response) {
 }
 
 export async function health(req: Request, res: Response) {
+  let jwtStatus: 'ok' | 'missing';
+  try {
+    jwtStatus = env.jwt.secret ? 'ok' : 'missing';
+  } catch {
+    jwtStatus = 'missing';
+  }
+
   try {
     await withDbRetry(() => sequelize.authenticate());
-    return sendSuccess(res, { status: 'ok', database: 'up' }, 'Healthy');
+    return sendSuccess(res, { status: 'ok', database: 'up', jwt: jwtStatus }, 'Healthy');
   } catch (err: unknown) {
+    if (isTlsVerificationError(err)) {
+      console.error(`[DB TLS ERROR] ${TLS_ACTIONABLE_ERROR}`);
+    }
     const errMsg = err instanceof Error ? err.message : String(err);
     console.error(`[HEALTH] Health check failed reqId=${req.id || 'none'}:`, err);
     return res.status(503).json({
       success: false,
       error: {
-        code: 'DATABASE_ERROR',
-        message: 'Database temporarily unavailable',
+        code: isTlsVerificationError(err) ? 'DB_TLS_ERROR' : 'DATABASE_ERROR',
+        message: isTlsVerificationError(err) ? TLS_ACTIONABLE_ERROR : 'Database temporarily unavailable',
         details: errMsg,
       },
+      jwt: jwtStatus,
       requestId: req.id || undefined,
     });
   }

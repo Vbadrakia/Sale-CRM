@@ -71,11 +71,41 @@ const validateWorkerConnection = (_client: unknown): boolean => {
   return true;
 };
 
-function getSslConfig(): false | { require: boolean; rejectUnauthorized: boolean; ca?: string } {
+export function normalizeCaCert(cert?: string): string | undefined {
+  if (!cert || typeof cert !== 'string') return undefined;
+  const trimmed = cert.trim();
+  if (!trimmed) return undefined;
+  return trimmed.replace(/\\n/g, '\n');
+}
+
+export function isTlsVerificationError(err: unknown): boolean {
+  if (!err) return false;
+  const msg = err instanceof Error ? err.message : String(err);
+  const code = (err as { code?: string })?.code || '';
+  return (
+    code === 'DEPTH_ZERO_SELF_SIGNED_CERT' ||
+    code === 'SELF_SIGNED_CERT_IN_CHAIN' ||
+    code === 'UNABLE_TO_VERIFY_LEAF_SIGNATURE' ||
+    code === 'CERT_HAS_EXPIRED' ||
+    /self-signed certificate/i.test(msg) ||
+    /certificate chain/i.test(msg) ||
+    /unable to verify the first certificate/i.test(msg)
+  );
+}
+
+export const TLS_ACTIONABLE_ERROR =
+  "DB TLS verification failed. Set DB_CA_CERT to your provider's root CA (Supabase: Dashboard -> Database -> SSL). Do NOT disable verification.";
+
+export function getSslConfig(): false | { require: boolean; rejectUnauthorized: boolean; ca?: string } {
   if (isTestOrSslDisabled) return false;
 
-  const rejectUnauthorized = process.env.DB_SSL_REJECT_UNAUTHORIZED !== 'false';
-  const caCert = process.env.DB_CA_CERT || process.env.DB_SSL_CA;
+  const isProd = process.env.NODE_ENV === 'production';
+  if (isProd && process.env.DB_SSL_REJECT_UNAUTHORIZED === 'false') {
+    throw new Error('FATAL SECURITY ERROR: DB_SSL_REJECT_UNAUTHORIZED=false is prohibited in production. Provide DB_CA_CERT instead.');
+  }
+
+  const rejectUnauthorized = isProd ? true : process.env.DB_SSL_REJECT_UNAUTHORIZED !== 'false';
+  const caCert = normalizeCaCert(process.env.DB_CA_CERT || process.env.DB_SSL_CA);
 
   return {
     require: true,
@@ -365,11 +395,21 @@ export async function diagnoseDatabaseConnection(connectionString: string): Prom
       results.userFind = true;
     }
   } catch (err: unknown) {
+    if (isTlsVerificationError(err)) {
+      console.error(`[DB TLS ERROR] ${TLS_ACTIONABLE_ERROR}`);
+    }
     results.error = err instanceof Error ? err.message : String(err);
   }
   return results;
 }
 
 export async function assertDatabaseConnection(): Promise<void> {
-  await sequelize.authenticate();
+  try {
+    await sequelize.authenticate();
+  } catch (err: unknown) {
+    if (isTlsVerificationError(err)) {
+      console.error(`[DB TLS ERROR] ${TLS_ACTIONABLE_ERROR}`);
+    }
+    throw err;
+  }
 }

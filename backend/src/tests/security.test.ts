@@ -318,5 +318,56 @@ export async function runSecurityTests() {
     );
     console.log('✓ JWT verification strictly pins HS256 algorithm and rejects alg=none tokens');
   }
+
+  // Test 8: Database TLS Strict Verification & CA Normalization (Item 2)
+  {
+    const { normalizeCaCert, isTlsVerificationError, TLS_ACTIONABLE_ERROR, getSslConfig } = await import('../config/database');
+
+    // 8A: CA cert normalization converts escaped newlines and trims
+    const rawPem = '-----BEGIN CERTIFICATE-----\\nMIIB...\\n-----END CERTIFICATE-----\\n';
+    const normalized = normalizeCaCert(rawPem);
+    assert.ok(normalized?.includes('\n'), 'Escaped \\n must be normalized to real newlines');
+    assert.equal(normalized?.includes('\\n'), false, 'No escaped \\n should remain');
+    assert.equal(normalizeCaCert('   '), undefined, 'Whitespace only cert returns undefined');
+    assert.equal(normalizeCaCert(undefined), undefined, 'Undefined cert returns undefined');
+
+    // 8B: isTlsVerificationError detects common TLS verification failures
+    const selfSignedErr = new Error('self-signed certificate in certificate chain');
+    assert.equal(isTlsVerificationError(selfSignedErr), true, 'Detects self-signed cert in chain');
+    const depthZeroErr = { code: 'DEPTH_ZERO_SELF_SIGNED_CERT', message: 'certificate verify failed' };
+    assert.equal(isTlsVerificationError(depthZeroErr), true, 'Detects DEPTH_ZERO_SELF_SIGNED_CERT code');
+    const regularDbErr = new Error('column "foo" does not exist');
+    assert.equal(isTlsVerificationError(regularDbErr), false, 'Does not misidentify regular SQL errors as TLS errors');
+    assert.ok(TLS_ACTIONABLE_ERROR.includes('DB_CA_CERT'), 'Actionable error directs users to set DB_CA_CERT');
+
+    // 8C: In production, DB_SSL_REJECT_UNAUTHORIZED=false is strictly rejected
+    const origNodeEnv = process.env.NODE_ENV;
+    const origReject = process.env.DB_SSL_REJECT_UNAUTHORIZED;
+    const origDbSsl = process.env.DB_SSL;
+    try {
+      process.env.NODE_ENV = 'production';
+      process.env.DB_SSL = 'true';
+      process.env.DB_SSL_REJECT_UNAUTHORIZED = 'false';
+
+      assert.throws(
+        () => getSslConfig(),
+        /FATAL SECURITY ERROR: DB_SSL_REJECT_UNAUTHORIZED=false is prohibited in production/,
+        'Production must throw fatal error if rejectUnauthorized is disabled',
+      );
+
+      // In production without disabling, rejectUnauthorized must be true
+      delete process.env.DB_SSL_REJECT_UNAUTHORIZED;
+      const prodSsl = getSslConfig();
+      assert.ok(prodSsl && prodSsl.rejectUnauthorized === true, 'rejectUnauthorized must be true in production');
+    } finally {
+      process.env.NODE_ENV = origNodeEnv;
+      if (origReject !== undefined) process.env.DB_SSL_REJECT_UNAUTHORIZED = origReject;
+      else delete process.env.DB_SSL_REJECT_UNAUTHORIZED;
+      if (origDbSsl !== undefined) process.env.DB_SSL = origDbSsl;
+      else delete process.env.DB_SSL;
+    }
+
+    console.log('✓ DB TLS verification enforces rejectUnauthorized=true and normalizes DB_CA_CERT');
+  }
 }
 
