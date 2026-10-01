@@ -5,7 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
 
-const WORKER_URL = 'https://crm.vedantbadrakia07.workers.dev';
+const WORKER_URL = process.env.WORKER_URL || 'http://localhost:5000';
 
 async function main() {
   console.log('====================================================');

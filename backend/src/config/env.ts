@@ -13,11 +13,15 @@ const COMPROMISED_SECRET_HASHES = new Set([
   '9be52467d0cf98a287a25039e1bfd8ea1b0f592fc62c2f42a7c4f4a3bc6f01ba', // SHA-256 of previously compromised key
   'a932586cb198607b0b4599d79b0f9c6ee81e372a1cd3ef742f57d685834f8ef0', // SHA-256 of first exposed chat JWT secret
   '723348dbc82f5db7645ed5a735f8093acce5613664136bc84054f710a10efe39', // SHA-256 of second exposed chat JWT secret
-  'e64c39f0e1180ee8c460b14421b44b62dbb730ee0f0e8f3a388b14da17637db7', // SHA-256 of dev-only-insecure-secret-change-me-min-32-chars-long
+  '917f9119ed1ca7f4e10d8793c35fa52903855cc6e39c7b34df595575bfebe1de', // SHA-256 of legacy test fallback secret
+  'beee8ecbe55c1ee4db2258c1d1d6f118a8520bd66bf21f8eec1d7d9d309e0361', // SHA-256 of current dev fallback secret
 ]);
 
-function isCompromisedSecret(secret: string): boolean {
+const DEV_FALLBACK_SECRET = 'crm-local-development-fallback-secret-minimum-32-chars';
+
+export function isCompromisedSecret(secret: string): boolean {
   if (!secret || secret.length < 32) return true;
+  if (secret === DEV_FALLBACK_SECRET) return true;
   const hash = crypto.createHash('sha256').update(secret).digest('hex');
   return COMPROMISED_SECRET_HASHES.has(hash);
 }
@@ -26,8 +30,6 @@ const isWorkerEnvironment =
   typeof (globalThis as unknown as { WebSocketPair?: unknown }).WebSocketPair !== 'undefined';
 
 let currentJwtSecret: string = process.env.JWT_SECRET || '';
-
-const DEV_FALLBACK_SECRET = 'dev-only-insecure-secret-change-me-min-32-chars-long';
 
 function validateAndGetJwtSecret(): string {
   const mode = process.env.NODE_ENV;
@@ -134,12 +136,24 @@ export function updateRuntimeEnv(envBindings: Record<string, unknown>): void {
     env.db.connectionString = envBindings.DATABASE_URL;
   }
   if (typeof envBindings.JWT_SECRET === 'string' && envBindings.JWT_SECRET) {
+    process.env.JWT_SECRET = envBindings.JWT_SECRET;
     env.jwt.secret = envBindings.JWT_SECRET;
   }
+  if (typeof envBindings.SYSTEM_KEY === 'string' && envBindings.SYSTEM_KEY) {
+    process.env.SYSTEM_KEY = envBindings.SYSTEM_KEY;
+  }
+  if (typeof envBindings.DB_CA_CERT === 'string' && envBindings.DB_CA_CERT) {
+    process.env.DB_CA_CERT = envBindings.DB_CA_CERT;
+  }
+  if (typeof envBindings.DB_SSL_CA === 'string' && envBindings.DB_SSL_CA) {
+    process.env.DB_SSL_CA = envBindings.DB_SSL_CA;
+  }
   if (typeof envBindings.FRONTEND_URL === 'string' && envBindings.FRONTEND_URL) {
+    process.env.FRONTEND_URL = envBindings.FRONTEND_URL;
     env.frontendUrl = envBindings.FRONTEND_URL;
   }
   if (typeof envBindings.CORS_ORIGINS === 'string' && envBindings.CORS_ORIGINS) {
+    process.env.CORS_ORIGINS = envBindings.CORS_ORIGINS;
     env.corsOrigins = envBindings.CORS_ORIGINS.split(',').map((o) => o.trim()).filter(Boolean);
   }
   if (env.isProduction) {

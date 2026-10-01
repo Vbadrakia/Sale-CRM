@@ -1,6 +1,6 @@
 "use strict";
 
-const BASE_URL = 'https://crm.vedantbadrakia07.workers.dev';
+const BASE_URL = process.env.BASE_URL || 'http://localhost:5000';
 
 let passedTests = 0;
 let failedTests = 0;

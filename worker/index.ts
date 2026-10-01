@@ -4,7 +4,7 @@ import { createApp } from '../backend/src/app';
 import { runFollowUpReminderJob } from '../backend/src/jobs/followupReminders';
 import { runImportRetentionJob } from '../backend/src/jobs/importRetention';
 import { assertDatabaseConnection, updateDatabaseConfig } from '../backend/src/config/database';
-import { updateRuntimeEnv } from '../backend/src/config/env';
+import { updateRuntimeEnv, isCompromisedSecret } from '../backend/src/config/env';
 import '../backend/src/models';
 
 export interface Env {
@@ -13,6 +13,9 @@ export interface Env {
   };
   DATABASE_URL?: string;
   JWT_SECRET?: string;
+  SYSTEM_KEY?: string;
+  DB_CA_CERT?: string;
+  DB_SSL_CA?: string;
   CORS_ORIGINS?: string;
   FRONTEND_URL?: string;
   ASSETS?: {
@@ -53,14 +56,39 @@ function getCorsHeaders(request: Request, env: Env): Record<string, string> {
 async function initializeWorkerConfig(env: Env): Promise<void> {
   if (!env) return;
 
-  // 1. Synchronize environment bindings (JWT_SECRET, NODE_ENV, etc.)
+  // 1. Copy worker secret/env bindings into process.env
+  if (typeof env.JWT_SECRET === 'string' && env.JWT_SECRET) {
+    process.env.JWT_SECRET = env.JWT_SECRET;
+  }
+  if (typeof env.SYSTEM_KEY === 'string' && env.SYSTEM_KEY) {
+    process.env.SYSTEM_KEY = env.SYSTEM_KEY;
+  }
+  if (typeof env.DB_CA_CERT === 'string' && env.DB_CA_CERT) {
+    process.env.DB_CA_CERT = env.DB_CA_CERT;
+  }
+  if (typeof env.DB_SSL_CA === 'string' && env.DB_SSL_CA) {
+    process.env.DB_SSL_CA = env.DB_SSL_CA;
+  }
+
+  // 2. Synchronize environment bindings (JWT_SECRET, NODE_ENV, etc.)
   updateRuntimeEnv(env as Record<string, unknown>);
 
-  // 2. Select the database connection string. Reconfiguring Sequelize destroys
+  const isProd = (env.NODE_ENV as string || process.env.NODE_ENV) === 'production';
+  const jwtSecret = env.JWT_SECRET || process.env.JWT_SECRET || '';
+
+  // Fail fast on Worker boot if JWT_SECRET is missing or compromised
+  if (!jwtSecret) {
+    if (isProd) {
+      throw new Error('FATAL: JWT_SECRET secret binding is missing on Worker boot! Set with: wrangler secret put JWT_SECRET');
+    }
+  } else if (isCompromisedSecret(jwtSecret)) {
+    throw new Error('FATAL: Configured JWT_SECRET is compromised or insecure for production use! Minimum 32 chars required.');
+  }
+
+  // 3. Select the database connection string. Reconfiguring Sequelize destroys
   // its pool, so doing this per request made concurrent dashboard requests tear
   // down one another's active connections.
   const connStr = env.HYPERDRIVE?.connectionString || (env.DATABASE_URL as string) || (process.env.DATABASE_URL as string) || '';
-  const isProd = process.env.NODE_ENV === 'production';
 
   if (!connStr) {
     if (isProd) {

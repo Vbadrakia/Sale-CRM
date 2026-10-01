@@ -17,8 +17,6 @@ crons = ["*/10 * * * *"]
 
 [vars]
 NODE_ENV = "production"
-CORS_ORIGINS = "https://crm.vedantbadrakia07.workers.dev"
-FRONTEND_URL = "https://crm.vedantbadrakia07.workers.dev"
 
 [[hyperdrive]]
 binding = "HYPERDRIVE"

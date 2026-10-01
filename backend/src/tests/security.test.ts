@@ -369,5 +369,60 @@ export async function runSecurityTests() {
 
     console.log('✓ DB TLS verification enforces rejectUnauthorized=true and normalizes DB_CA_CERT');
   }
+
+  // Test 9: Worker Secrets, Env Sync, and Health Check Reporting (Item 3)
+  {
+    const { updateRuntimeEnv, isCompromisedSecret, env: appEnv } = await import('../config/env');
+    const { health } = await import('../controllers/dashboard.controller');
+
+    // 9A: updateRuntimeEnv copies SYSTEM_KEY and DB_CA_CERT into process.env
+    delete process.env.SYSTEM_KEY;
+    delete process.env.DB_CA_CERT;
+    delete process.env.DB_SSL_CA;
+
+    updateRuntimeEnv({
+      SYSTEM_KEY: 'test-system-key-32-chars-long-secure-key',
+      DB_CA_CERT: 'test-ca-cert-pem',
+      DB_SSL_CA: 'test-ssl-ca-pem',
+    });
+
+    assert.equal(process.env.SYSTEM_KEY, 'test-system-key-32-chars-long-secure-key', 'SYSTEM_KEY must be copied to process.env');
+    assert.equal(process.env.DB_CA_CERT, 'test-ca-cert-pem', 'DB_CA_CERT must be copied to process.env');
+    assert.equal(process.env.DB_SSL_CA, 'test-ssl-ca-pem', 'DB_SSL_CA must be copied to process.env');
+
+    // 9B: isCompromisedSecret correctly flags short or known-bad secrets
+    assert.equal(isCompromisedSecret('short'), true, 'Short secrets are rejected');
+    assert.equal(isCompromisedSecret('crm-local-development-fallback-secret-minimum-32-chars'), true, 'Known insecure secret rejected');
+    assert.equal(isCompromisedSecret('a'.repeat(64)), false, 'Sufficiently long novel secret accepted');
+
+    // 9C: Health check reports { jwt: 'ok' | 'missing' } without leaking secrets
+    const origSecret = appEnv.jwt.secret;
+    try {
+      let healthResJson: Record<string, unknown> = {};
+      const fakeRes = {
+        status: () => fakeRes,
+        json: (d: Record<string, unknown>) => { healthResJson = d; return fakeRes; },
+      } as unknown as Response;
+
+      const fakeReq = { id: 'health-test-1' } as unknown as Request;
+
+      // Mock database authenticate so health check passes
+      const origAuth = sequelize.authenticate;
+      (sequelize as unknown as Record<string, unknown>).authenticate = async () => undefined;
+      try {
+        await health(fakeReq, fakeRes);
+        const data = healthResJson.data as Record<string, unknown>;
+        assert.ok(data && (data.jwt === 'ok' || data.jwt === 'missing'), 'Health check must report jwt as ok or missing');
+        const jsonStr = JSON.stringify(healthResJson);
+        assert.equal(jsonStr.includes(origSecret), false, 'Health check MUST NOT leak JWT secret value');
+      } finally {
+        (sequelize as unknown as Record<string, unknown>).authenticate = origAuth;
+      }
+    } finally {
+      appEnv.jwt.secret = origSecret;
+    }
+
+    console.log('✓ Secrets, Worker env sync, and safe health check jwt status reporting verified');
+  }
 }
 
