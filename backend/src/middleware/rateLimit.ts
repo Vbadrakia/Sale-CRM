@@ -78,14 +78,9 @@ async function dbRateLimit(
   windowMs: number,
   limit: number,
 ): Promise<{ allowed: boolean; remaining: number; resetAt: number } | null> {
-  // In test mode, use memory rate limiter for fast tests
-  if (process.env.NODE_ENV === 'test') {
-    return null;
-  }
-
   try {
     const expireAt = new Date(Date.now() + windowMs);
-    const [row] = await sequelize.query<RateLimitRow>(
+    const queryPromise = sequelize.query<RateLimitRow>(
       `INSERT INTO rate_limits (key, points, expire_at, created_at, updated_at)
        VALUES (:key, 1, :expireAt, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
        ON CONFLICT (key) DO UPDATE
@@ -105,6 +100,16 @@ async function dbRateLimit(
       },
     );
 
+    let timer: NodeJS.Timeout | undefined;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error('Rate limit DB query timed out (>300ms)')), 300);
+    });
+
+    const rows = await Promise.race([queryPromise, timeoutPromise]).finally(() => {
+      if (timer) clearTimeout(timer);
+    });
+
+    const row = rows?.[0];
     if (row) {
       const resetAt = new Date(row.expire_at).getTime();
       const points = Number(row.points);
@@ -113,9 +118,57 @@ async function dbRateLimit(
       return { allowed, remaining, resetAt };
     }
   } catch {
-    // If DB is unreachable, fail securely to in-memory fallback
+    // If DB is unreachable, throws, or times out (>300ms), fail securely to in-memory fallback
   }
   return null;
+}
+
+export function resetMemoryRateLimits(): void {
+  fallbackHits.clear();
+}
+
+/**
+ * In-memory rate limiter using bounded Map (LRU + expired eviction).
+ * Never hits the database. Safe for high-frequency global routes like /api.
+ */
+export function createMemoryLimiter(
+  prefix: string,
+  windowMs: number,
+  limit: number,
+  keyGenerator?: (req: Request) => string,
+) {
+  return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    // In test environment, skip unless explicitly testing rate limits with x-test-rate-limit header
+    if (process.env.NODE_ENV === 'test' && !req.headers['x-test-rate-limit']) {
+      next();
+      return;
+    }
+
+    const ip = resolveClientIp(req);
+    const customKey = keyGenerator ? keyGenerator(req) : '';
+    const key = customKey ? `${prefix}:${ip}:${customKey}` : `${prefix}:${ip}`;
+
+    const result = inMemoryFallback(key, windowMs, limit);
+
+    const retryAfterSeconds = Math.max(1, Math.ceil((result.resetAt - Date.now()) / 1000));
+    res.setHeader('X-RateLimit-Limit', limit);
+    res.setHeader('X-RateLimit-Remaining', result.remaining);
+    res.setHeader('X-RateLimit-Reset', Math.ceil(result.resetAt / 1000));
+
+    if (!result.allowed) {
+      res.setHeader('Retry-After', retryAfterSeconds);
+      res.status(429).json({
+        success: false,
+        code: 'RATE_LIMITED',
+        message: 'Too many attempts. Please try again later.',
+        errors: [],
+        retryAfter: retryAfterSeconds,
+        requestId: req.id,
+      });
+      return;
+    }
+    next();
+  };
 }
 
 export function createDistributedLimiter(
@@ -135,8 +188,14 @@ export function createDistributedLimiter(
     const customKey = keyGenerator ? keyGenerator(req) : '';
     const key = customKey ? `${prefix}:${ip}:${customKey}` : `${prefix}:${ip}`;
 
-    // Try DB-backed counter for distributed worker isolates, fallback to bounded in-memory
-    let result = await dbRateLimit(key, windowMs, limit);
+    // Try DB-backed counter for distributed worker isolates; if it throws or times out (>300ms), fallback to bounded in-memory
+    let result: { allowed: boolean; remaining: number; resetAt: number } | null;
+    try {
+      result = await dbRateLimit(key, windowMs, limit);
+    } catch {
+      result = null;
+    }
+
     if (!result) {
       result = inMemoryFallback(key, windowMs, limit);
     }
@@ -163,10 +222,10 @@ export function createDistributedLimiter(
 }
 
 // Per-IP global login rate limit (30 attempts per 15 min per IP to stop credential spraying)
-const loginIpLimiter = createDistributedLimiter('auth:login:ip', 15 * 60 * 1000, 30);
+export const loginIpLimiter = createDistributedLimiter('auth:login:ip', 15 * 60 * 1000, 30);
 
 // Per-(IP + Email) login rate limit (10 attempts per 15 min per account)
-const loginAccountLimiter = createDistributedLimiter('auth:login:account', 15 * 60 * 1000, 10, (req) => {
+export const loginAccountLimiter = createDistributedLimiter('auth:login:account', 15 * 60 * 1000, 10, (req) => {
   const email = (req.body as { email?: string })?.email;
   return email ? email.toLowerCase().trim() : '';
 });
@@ -190,5 +249,6 @@ export const passwordResetLimiter = createDistributedLimiter('auth:pwreset', 60 
   return email ? email.toLowerCase().trim() : '';
 });
 
-// General API: 300 requests per minute
-export const apiLimiter = createDistributedLimiter('api:global', 60 * 1000, 300);
+// TODO: Optional Cloudflare rate-limiting binding for /api (e.g. env.RATE_LIMITER) can be added here.
+// General API: 300 requests per minute using bounded in-memory map (zero DB queries)
+export const apiLimiter = createMemoryLimiter('api:global', 60_000, 300);

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { errorHandler } from '../middleware/error';
-import { createDistributedLimiter } from '../middleware/rateLimit';
+import { createDistributedLimiter, apiLimiter, resetMemoryRateLimits } from '../middleware/rateLimit';
+import { sequelize } from '../config/database';
 import { env } from '../config/env';
 import { ApiError } from '../utils/ApiError';
 import type { Request, Response, NextFunction } from 'express';
@@ -109,26 +110,30 @@ export async function runSecurityTests() {
     }
   }
 
-  // Test 3: Rate Limiting & Fail-Secure Protection (Task 10)
+  // Test 3: Rate Limiting & Fail-Secure Protection (Task 10 & Item 1)
   {
-    // Limiter with limit = 2 per 1000ms
-    const limiter = createDistributedLimiter('test-login', 1000, 2);
+    resetMemoryRateLimits();
 
-    const headers: Record<string, string> = {
-      'cf-connecting-ip': '203.0.113.195',
-      'x-test-rate-limit': 'true', // Header to activate limiter in test environment
-    };
-
-    function callLimiter(): Promise<{ status: number; body?: unknown; headers: Record<string, unknown> }> {
+    // Helper to simulate request/response cycle for any middleware
+    function runMiddleware(
+      fn: (req: Request, res: Response, next: NextFunction) => Promise<void> | void,
+      customReq: Partial<Request> = {},
+    ): Promise<{ status: number; body?: unknown; headers: Record<string, unknown> }> {
       return new Promise((resolve) => {
         let resStatus = 200;
         let resBody: unknown = null;
         const resHeaders: Record<string, unknown> = {};
 
         const req = {
-          headers,
+          headers: {
+            'cf-connecting-ip': '203.0.113.195',
+            'x-test-rate-limit': 'true',
+            ...customReq.headers,
+          },
           ip: '203.0.113.195',
           id: 'rl-test',
+          body: customReq.body || {},
+          ...customReq,
         } as unknown as Request;
 
         const res = {
@@ -149,20 +154,101 @@ export async function runSecurityTests() {
           resolve({ status: 200, headers: resHeaders });
         };
 
-        void limiter(req, res, next);
+        void fn(req, res, next);
       });
     }
 
-    const r1 = await callLimiter();
-    assert.equal(r1.status, 200, 'First request should be allowed');
+    // 3A: apiLimiter must cause ZERO queries to rate_limits / database
+    {
+      const origQuery = sequelize.query;
+      let dbQueryCount = 0;
+      (sequelize as unknown as Record<string, unknown>).query = async (...args: unknown[]) => {
+        dbQueryCount++;
+        return (origQuery as (...a: unknown[]) => Promise<unknown>).apply(sequelize, args);
+      };
 
-    const r2 = await callLimiter();
-    assert.equal(r2.status, 200, 'Second request should be allowed');
+      try {
+        const r1 = await runMiddleware(apiLimiter);
+        assert.equal(r1.status, 200, 'apiLimiter allows normal request');
+        const r2 = await runMiddleware(apiLimiter);
+        assert.equal(r2.status, 200, 'apiLimiter allows second request');
+        assert.equal(dbQueryCount, 0, 'apiLimiter must NEVER execute sequelize queries (zero DB hits)');
+        console.log('✓ Normal API requests cause zero queries to rate_limits (in-memory limiter verified)');
+      } finally {
+        (sequelize as unknown as { query: typeof origQuery }).query = origQuery;
+      }
+    }
 
-    const r3 = await callLimiter();
-    assert.equal(r3.status, 429, 'Third request exceeding limit=2 must be rejected with 429 Too Many Requests');
-    assert.ok(r3.headers['Retry-After'] !== undefined, '429 response must provide Retry-After header');
-    console.log('✓ Rate limiting enforces thresholds and returns 429 with Retry-After header');
+    // 3B: Distributed limiter returns 429 when DB is up and threshold is reached
+    {
+      const origQuery = sequelize.query;
+      let simulatedPoints = 0;
+      (sequelize as unknown as Record<string, unknown>).query = (async () => {
+        simulatedPoints++;
+        return [
+          {
+            points: simulatedPoints,
+            expire_at: new Date(Date.now() + 60000).toISOString(),
+          },
+        ];
+      }) as unknown as typeof origQuery;
+
+      try {
+        const dbLimiter = createDistributedLimiter('test:dist:db', 60000, 2);
+        const r1 = await runMiddleware(dbLimiter);
+        assert.equal(r1.status, 200, 'First request within limit succeeds');
+        const r2 = await runMiddleware(dbLimiter);
+        assert.equal(r2.status, 200, 'Second request within limit succeeds');
+        const r3 = await runMiddleware(dbLimiter);
+        assert.equal(r3.status, 429, 'Third request exceeding limit returns 429');
+        assert.ok(r3.headers['Retry-After'], '429 includes Retry-After header');
+        console.log('✓ Distributed limiter enforces limits via DB when DB is up');
+      } finally {
+        (sequelize as unknown as Record<string, unknown>).query = origQuery;
+      }
+    }
+
+    // 3C: Fallback path: When DB is down (throws), limiter falls back to in-memory and still 429s without returning 500
+    {
+      const origQuery = sequelize.query;
+      (sequelize as unknown as Record<string, unknown>).query = (async () => {
+        throw new Error('Database connection refused (simulated DB outage)');
+      }) as unknown as typeof origQuery;
+
+      try {
+        const fallbackLimiter = createDistributedLimiter('test:dist:dbdown', 60000, 2);
+        const r1 = await runMiddleware(fallbackLimiter);
+        assert.equal(r1.status, 200, 'First request allows access via in-memory fallback');
+        const r2 = await runMiddleware(fallbackLimiter);
+        assert.equal(r2.status, 200, 'Second request allows access via in-memory fallback');
+        const r3 = await runMiddleware(fallbackLimiter);
+        assert.equal(r3.status, 429, 'Third request exceeding limit returns 429 even when DB is down');
+        assert.ok(r3.headers['Retry-After'], '429 includes Retry-After header on fallback');
+        console.log('✓ Login/distributed limiter falls back to in-memory counter when DB is down and still 429s');
+      } finally {
+        (sequelize as unknown as Record<string, unknown>).query = origQuery;
+      }
+    }
+
+    // 3D: Login limiter test when DB times out (>300ms)
+    {
+      const origQuery = sequelize.query;
+      (sequelize as unknown as Record<string, unknown>).query = (async () => {
+        await new Promise((resolve) => setTimeout(resolve, 400));
+        return [];
+      }) as unknown as typeof origQuery;
+
+      try {
+        const timeoutLimiter = createDistributedLimiter('test:dist:timeout', 60000, 1);
+        const r1 = await runMiddleware(timeoutLimiter);
+        assert.equal(r1.status, 200, 'Request does not fail with 500 on DB timeout (>300ms)');
+        const r2 = await runMiddleware(timeoutLimiter);
+        assert.equal(r2.status, 429, 'Subsequent request blocked via in-memory fallback');
+        console.log('✓ Distributed limiter times out gracefully (>300ms) and fails securely to memory fallback');
+      } finally {
+        (sequelize as unknown as Record<string, unknown>).query = origQuery;
+      }
+    }
   }
 
   // Test 4: Secret Security & Compromised Secret Hash Protection (Task 1, 3)
