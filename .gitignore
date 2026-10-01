@@ -1,0 +1,52 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Environment variables & secrets (keep .env.example only)
+.env
+.env.*
+!.env.example
+!.env.test.example
+backend/.env
+frontend/.env
+.dev.vars
+.dev.vars.*
+
+# Build outputs & archives
+dist/
+build/
+*.tsbuildinfo
+deployed-source.zip
+*.zip
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+*.log
+
+# Editor & OS files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Temporary and upload directories
+uploads/
+tmp/
+temp/
+.temp/
+supabase/.temp/
+coverage/
+.wrangler/
+scripts/backups/
+scratch/
+

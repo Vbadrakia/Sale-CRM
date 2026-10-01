@@ -1,0 +1,39 @@
+name = "crm"
+workers_dev = true
+main = "worker/index.ts"
+compatibility_date = "2026-08-04"
+compatibility_flags = ["nodejs_compat", "enable_nodejs_http_server_modules"]
+
+[placement]
+mode = "smart"
+
+[assets]
+directory = "frontend/dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+
+[triggers]
+crons = ["*/10 * * * *"]
+
+[vars]
+NODE_ENV = "production"
+CORS_ORIGINS = "https://crm.vedantbadrakia07.workers.dev"
+FRONTEND_URL = "https://crm.vedantbadrakia07.workers.dev"
+
+[[hyperdrive]]
+binding = "HYPERDRIVE"
+id = "053c2b3f72514f95b5ab07f3ba6d6c6c"
+
+
+# ...
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+invocation_logs = true
+persist = true
+
+[observability.traces]
+enabled = true
+head_sampling_rate = 1
+persist = true
+# ...
