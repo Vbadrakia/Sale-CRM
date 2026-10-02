@@ -274,4 +274,47 @@ export async function runPerformanceTests() {
       Activity.create = origActivityCreate;
     }
   }
+
+  // Test 5: Cache-Control: no-store on authenticated responses & listLeads distinct: false
+  {
+    const { authenticate } = await import('../middleware/auth');
+    const { signAuthToken } = await import('../utils/jwt');
+    const origFindByPk = User.findByPk;
+    try {
+      User.findByPk = (async () => ({
+        id: 999,
+        email: 'perfuser@example.com',
+        role: 'ADMIN',
+        isActive: true,
+        emailVerified: true,
+        tokenVersion: 1,
+      })) as unknown as typeof User.findByPk;
+
+      const token = signAuthToken({ id: 999, email: 'perfuser@example.com', role: 'ADMIN', tokenVersion: 1 });
+      const req = {
+        method: 'GET',
+        headers: { authorization: `Bearer ${token}` },
+      } as unknown as Request;
+
+      const headersSet: Record<string, string> = {};
+      const res = {
+        setHeader(name: string, value: string) {
+          headersSet[name.toLowerCase()] = value;
+        },
+      } as unknown as Response;
+
+      await authenticate(req, res, () => {});
+      assert.equal(headersSet['cache-control'], 'no-store', 'authenticate must set Cache-Control: no-store on response');
+
+      // Verify listLeads implementation uses distinct: false
+      const fs = await import('fs');
+      const path = await import('path');
+      const leadControllerCode = fs.readFileSync(path.resolve(__dirname, '../controllers/lead.controller.ts'), 'utf-8');
+      assert.ok(leadControllerCode.includes('distinct: false,'), 'listLeads in lead.controller.ts must use distinct: false for performance');
+
+      console.log('✓ Cache-Control: no-store on authenticated responses and listLeads distinct: false verified');
+    } finally {
+      User.findByPk = origFindByPk;
+    }
+  }
 }

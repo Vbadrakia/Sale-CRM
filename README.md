@@ -41,6 +41,9 @@ If TLS verification fails at startup, health check, or migration, the system log
 
 3. **Database Connection (Hyperdrive or Direct)**:
    - For Hyperdrive: bind in `wrangler.toml` under `[[hyperdrive]]`.
+     - **Port 5432 (Session Mode / Direct)**: Direct connection to PostgreSQL. Supports full session state, advisory locks, and persistent prepared statements.
+     - **Port 6543 (Transaction Pooler Mode / Supavisor)**: Connections are pooled per transaction. Named prepared statements across transactions and session-level locks are not supported in transaction mode. The backend queries are parameterized without server-side prepared statement caching for full compatibility.
+     - Hyperdrive handles connection multiplexing at Cloudflare edge; the Sequelize pool uses `maxUses: Infinity` to prevent premature socket recycling.
    - For Direct connection string:
      ```bash
      npx wrangler secret put DATABASE_URL

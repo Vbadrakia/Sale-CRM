@@ -334,6 +334,12 @@ export function updateDatabaseConfig(connectionString: string): void {
           })()),
     },
 
+    // Pool configuration optimized for Hyperdrive and Supavisor:
+    // - Port 5432 (Session mode / direct): Full session state and advisory locks supported.
+    // - Port 6543 (Transaction pooler / Supavisor): Connections multiplexed per transaction.
+    //   Named prepared statements and cross-transaction session variables are not supported.
+    // Hyperdrive itself maintains connection multiplexing; maxUses: Infinity prevents
+    // Sequelize from prematurely terminating cached Hyperdrive virtual connections.
     pool: {
       max: 5,
       min: 0,

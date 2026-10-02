@@ -52,7 +52,7 @@ function pruneExpiredAuthCache(now: number) {
  * Verifies the JWT and loads the live user record. The role/identity is always
  * verified against the database — never trusted from unverified client claims.
  */
-export async function authenticate(req: Request, _res: Response, next: NextFunction) {
+export async function authenticate(req: Request, res: Response, next: NextFunction) {
   try {
     let token: string | undefined;
     let isFromCookie = false;
@@ -159,6 +159,10 @@ export async function authenticate(req: Request, _res: Response, next: NextFunct
     if (!user.emailVerified) {
       console.warn(`[AUTH] auth.session_invalidated reason=ACCOUNT_UNVERIFIED userId=${user.id} reqId=${req.id || 'none'}`);
       return next(ApiError.forbidden('Account is not verified', 'ACCOUNT_UNVERIFIED'));
+    }
+
+    if (typeof res?.setHeader === 'function') {
+      res.setHeader('Cache-Control', 'no-store');
     }
 
     req.user = user;
