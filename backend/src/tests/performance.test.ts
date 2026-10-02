@@ -20,10 +20,10 @@ export async function runPerformanceTests() {
     assert.equal(retryConfig.max, 1, 'Sequelize retry max must be 1 to prevent stacked retry explosions');
 
     const hasTimeoutPattern = retryConfig.match?.some((pattern) => {
-      const str = pattern.toString();
-      return str.includes('query read timeout') || str.includes('ETIMEDOUT') || str.includes('closed');
+      const str = pattern.toString().toLowerCase();
+      return str.includes('timeout') || str.includes('timedout') || str.includes('etimedout') || str.includes('closed');
     });
-    assert.equal(hasTimeoutPattern, false, 'Timeout patterns (/closed/, /ETIMEDOUT/, /query read timeout/) must be excluded from retry patterns');
+    assert.equal(hasTimeoutPattern, false, 'Timeout patterns (/timeout/, /timedout/, /closed/, /ETIMEDOUT/) must be excluded from retry patterns');
 
     console.log('✓ Pool options and non-stacked retry layer verified');
   }

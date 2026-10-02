@@ -122,7 +122,6 @@ const retryConfig = {
     /SequelizeHostNotFoundError/,
     /SequelizeHostNotReachableError/,
     /SequelizeInvalidConnectionError/,
-    /SequelizeConnectionTimedOutError/,
     /Connection terminated/,
     /ECONNRESET/,
     /socket hang up/,
