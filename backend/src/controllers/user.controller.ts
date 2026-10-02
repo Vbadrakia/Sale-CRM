@@ -114,12 +114,17 @@ export async function createUser(req: Request, res: Response) {
     emailVerified: false,
   }));
 
-  // Generate secure set-password link instead of sending temporary plaintext password
+  // Invalidate any previous tokens for this user and generate a secure 48h set-password link
+  await withDbRetry(() => PasswordResetToken.update(
+    { usedAt: new Date() },
+    { where: { userId: user.id, usedAt: null } },
+  ));
+
   const rawToken = generateResetToken();
   await withDbRetry(() => PasswordResetToken.create({
     userId: user.id,
     tokenHash: sha256(rawToken),
-    expiresAt: minutesFromNow(env.passwordReset.expiresMinutes * 48), // 24-hour setup window
+    expiresAt: minutesFromNow(48 * 60), // 48-hour setup window
   }));
 
   await sendWelcomeEmail(user.email, user.firstName, rawToken).catch((error) => {

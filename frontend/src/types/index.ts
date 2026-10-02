@@ -17,7 +17,6 @@ export interface User {
   createdAt: string;
   updatedAt: string;
   assignedLeadCount?: number;
-  temporaryPassword?: string;
   stats?: {
     assignedLeads: number;
     wonLeads: number;

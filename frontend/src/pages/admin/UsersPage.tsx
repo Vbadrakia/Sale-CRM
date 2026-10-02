@@ -44,7 +44,6 @@ export default function UsersPage() {
   const [toggling, setToggling] = useState<User | null>(null);
   const [resetting, setResetting] = useState<User | null>(null);
   const [busy, setBusy] = useState(false);
-  const [temporaryPassword, setTemporaryPassword] = useState<string | null>(null);
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -122,7 +121,7 @@ export default function UsersPage() {
         });
         toast.success('User updated');
       } else {
-        const result = await userApi.create({
+        await userApi.create({
           firstName: form.firstName.trim(),
           lastName: form.lastName.trim(),
           email: form.email.trim().toLowerCase(),
@@ -130,8 +129,7 @@ export default function UsersPage() {
           role: form.role,
           password: form.password || undefined,
         });
-        if (result.data.temporaryPassword) setTemporaryPassword(result.data.temporaryPassword);
-        toast.success('User created — they must verify their email at first sign-in');
+        toast.success('User created — password setup instructions sent by email');
       }
       setShowForm(false);
       await load();
@@ -164,10 +162,9 @@ export default function UsersPage() {
     if (!resetting) return;
     setBusy(true);
     try {
-      const result = await userApi.resetPassword(resetting.id);
+      await userApi.resetPassword(resetting.id);
       setResetting(null);
-      if (result.data.temporaryPassword) setTemporaryPassword(result.data.temporaryPassword);
-      toast.success('Password reset');
+      toast.success('Password reset email sent to user');
     } catch (err) {
       toast.error(err instanceof ApiRequestError ? err.message : 'Could not reset the password.');
     } finally {
@@ -318,15 +315,6 @@ export default function UsersPage() {
         </div>
       </Modal>
 
-      <Modal
-        open={!!temporaryPassword}
-        title="Temporary password"
-        onClose={() => setTemporaryPassword(null)}
-        footer={<Button onClick={() => setTemporaryPassword(null)}>Done</Button>}
-      >
-        <p className="text-sm text-slate-600">Share this password with the user. It is shown only once.</p>
-        <p className="mt-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 font-mono text-sm">{temporaryPassword}</p>
-      </Modal>
 
       <ConfirmDialog
         open={!!toggling}

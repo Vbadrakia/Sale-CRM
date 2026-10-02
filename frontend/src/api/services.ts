@@ -53,7 +53,7 @@ export const userApi = {
   setStatus: (id: number, isActive: boolean) =>
     request<User>(`/users/${id}/status`, { method: 'PATCH', body: { isActive } }),
   resetPassword: (id: number, password?: string) =>
-    request<{ temporaryPassword?: string }>(`/users/${id}/reset-password`, { method: 'POST', body: { password } }),
+    request<{ success?: boolean }>(`/users/${id}/reset-password`, { method: 'POST', body: { password } }),
 };
 
 /* ---------------------------------- leads --------------------------------- */

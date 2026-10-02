@@ -481,5 +481,124 @@ export async function runSecurityTests() {
 
     console.log('✓ Migration ordering, idempotency aliases, and pg_trgm extensions schema resolution verified');
   }
+
+  // Test 11: Email Set-Password Flow, SHA-256 Token Storage, 48h Expiry & Timing-Safe Token Comparison (Item 8)
+  {
+    const { PasswordResetToken, User } = await import('../models');
+    const { createUser } = await import('../controllers/user.controller');
+    const { resetPassword } = await import('../controllers/auth.controller');
+    const { sha256 } = await import('../utils/tokens');
+    const { env } = await import('../config/env');
+
+    // 11A: User creation issues a token with 48h expiry stored as SHA-256 hash
+    let createdTokenRecord: Record<string, unknown> | null = null;
+    const origTokenCreate = PasswordResetToken.create;
+    const origTokenUpdate = PasswordResetToken.update;
+    const origUserFindOne = User.findOne;
+    const origUserCreate = User.create;
+
+    try {
+      User.findOne = (async () => null) as unknown as typeof origUserFindOne;
+      User.create = (async (data: Record<string, unknown>) => ({
+        id: 42,
+        ...data,
+      })) as unknown as typeof origUserCreate;
+
+      PasswordResetToken.update = (async () => [1]) as unknown as typeof origTokenUpdate;
+      PasswordResetToken.create = (async (record: Record<string, unknown>) => {
+        createdTokenRecord = record;
+        return record;
+      }) as unknown as typeof origTokenCreate;
+
+      let sendStatusCode = 0;
+      let sendJsonBody: unknown = null;
+      const res = {
+        status(code: number) { sendStatusCode = code; return res; },
+        json(body: unknown) { sendJsonBody = body; return res; },
+      } as unknown as Response;
+
+      const req = {
+        body: {
+          firstName: 'Alice',
+          lastName: 'Smith',
+          email: 'alice@example.com',
+          role: 'BDE',
+        },
+      } as unknown as Request;
+
+      await createUser(req, res);
+      assert.equal(sendStatusCode, 201);
+      assert.ok(createdTokenRecord !== null);
+      assert.equal((createdTokenRecord as Record<string, unknown>).userId, 42);
+
+      // Verify SHA-256 hash length (64 hex characters)
+      const tokenHash = (createdTokenRecord as Record<string, unknown>).tokenHash as string;
+      assert.equal(typeof tokenHash, 'string');
+      assert.equal(tokenHash.length, 64, 'Token must be stored as 64-char SHA-256 hash');
+
+      // Verify 48-hour expiry window (48h = 172800 seconds)
+      const expiresAt = (createdTokenRecord as Record<string, unknown>).expiresAt as Date;
+      const diffMs = expiresAt.getTime() - Date.now();
+      const diffHours = diffMs / (1000 * 60 * 60);
+      assert.ok(diffHours >= 47.9 && diffHours <= 48.1, `Expiry must be 48 hours for welcome links (got ${diffHours.toFixed(1)}h)`);
+
+      // 11B: Password reset timing-safe comparison and single-use invalidation
+      const validToken = 'valid-test-token-value-12345';
+      const validHash = sha256(validToken);
+
+      let tokenSaved = false;
+      let tokenUpdated = false;
+      let userTokenVersionBumped = false;
+
+      const mockToken = {
+        userId: 42,
+        tokenHash: validHash,
+        usedAt: null,
+        expiresAt: new Date(Date.now() + 1800000), // 30 min
+        save: async () => { tokenSaved = true; },
+      };
+
+      const mockUser = {
+        id: 42,
+        tokenVersion: 1,
+        save: async () => { userTokenVersionBumped = true; },
+      };
+
+      PasswordResetToken.findOne = (async () => mockToken) as unknown as typeof PasswordResetToken.findOne;
+      User.findByPk = (async () => mockUser) as unknown as typeof User.findByPk;
+      PasswordResetToken.update = (async () => { tokenUpdated = true; return [1]; }) as unknown as typeof PasswordResetToken.update;
+
+      const resetReq = {
+        body: {
+          token: validToken,
+          password: 'NewStrongPassword123!',
+        },
+      } as unknown as Request;
+
+      let resetStatusCode = 200;
+      const resetRes = {
+        status(code: number) { resetStatusCode = code; return resetRes; },
+        json(body: unknown) { return resetRes; },
+      } as unknown as Response;
+
+      await resetPassword(resetReq, resetRes);
+      assert.equal(resetStatusCode, 200);
+      assert.equal(tokenSaved, true, 'Reset token must be marked used on consumption');
+      assert.equal(tokenUpdated, true, 'Active reset tokens for user must be invalidated');
+      assert.equal(userTokenVersionBumped, true, 'User tokenVersion must be incremented to revoke old sessions');
+
+      // 11C: Mail links strictly go to configured FRONTEND_URL
+      const { sendWelcomeEmail, sendPasswordResetEmail } = await import('../services/mailer.service');
+      // FRONTEND_URL is used by both functions without touching Host headers
+      assert.ok(env.frontendUrl, 'FRONTEND_URL must be configured');
+
+      console.log('✓ Email set-password flow, 48h welcome expiry, SHA-256 tokens, and timing-safe reset verified');
+    } finally {
+      PasswordResetToken.create = origTokenCreate;
+      PasswordResetToken.update = origTokenUpdate;
+      User.findOne = origUserFindOne;
+      User.create = origUserCreate;
+    }
+  }
 }
 

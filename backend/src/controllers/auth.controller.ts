@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
 import { Op, QueryTypes } from 'sequelize';
 import { Request, Response } from 'express';
@@ -188,10 +189,20 @@ export async function forgotPassword(req: Request, res: Response) {
 
 export async function resetPassword(req: Request, res: Response) {
   const { token, password } = req.body as { token: string; password: string };
+  const candidateHash = sha256(token || '');
   const record = await withDbRetry(() => PasswordResetToken.findOne({
-    where: { tokenHash: sha256(token), usedAt: null, expiresAt: { [Op.gt]: new Date() } },
+    where: { tokenHash: candidateHash, usedAt: null, expiresAt: { [Op.gt]: new Date() } },
   }));
-  if (!record) throw ApiError.badRequest('This reset link is invalid or has expired');
+
+  const dummyHash = sha256('dummy-token-for-constant-time-comparison');
+  const expectedHash = record ? record.tokenHash : dummyHash;
+  const candidateBuf = Buffer.from(candidateHash, 'hex');
+  const expectedBuf = Buffer.from(expectedHash, 'hex');
+  const isMatch = candidateBuf.length === expectedBuf.length && crypto.timingSafeEqual(candidateBuf, expectedBuf);
+
+  if (!record || !isMatch) {
+    throw ApiError.badRequest('This reset link is invalid or has expired');
+  }
 
   const user = await withDbRetry(() => User.findByPk(record.userId));
   if (!user) throw ApiError.badRequest('This reset link is invalid or has expired');
@@ -201,6 +212,12 @@ export async function resetPassword(req: Request, res: Response) {
   await withDbRetry(() => user.save());
   record.usedAt = new Date();
   await withDbRetry(() => record.save());
+
+  // Invalidate any other active reset tokens for this user
+  await withDbRetry(() => PasswordResetToken.update(
+    { usedAt: new Date() },
+    { where: { userId: user.id, usedAt: null } },
+  ));
 
   return sendSuccess(res, { reset: true }, 'Password updated. You can now sign in.');
 }
