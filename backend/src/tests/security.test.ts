@@ -583,6 +583,7 @@ export async function runSecurityTests() {
 
       await createUser(req, res);
       assert.equal(sendStatusCode, 201);
+      assert.ok(sendJsonBody !== null, 'Response body must be provided');
       assert.ok(createdTokenRecord !== null);
       assert.equal((createdTokenRecord as Record<string, unknown>).userId, 42);
 
@@ -633,7 +634,7 @@ export async function runSecurityTests() {
       let resetStatusCode = 200;
       const resetRes = {
         status(code: number) { resetStatusCode = code; return resetRes; },
-        json(body: unknown) { return resetRes; },
+        json(_body: unknown) { return resetRes; },
       } as unknown as Response;
 
       await resetPassword(resetReq, resetRes);
@@ -644,6 +645,8 @@ export async function runSecurityTests() {
 
       // 11C: Mail links strictly go to configured FRONTEND_URL
       const { sendWelcomeEmail, sendPasswordResetEmail } = await import('../services/mailer.service');
+      assert.equal(typeof sendWelcomeEmail, 'function');
+      assert.equal(typeof sendPasswordResetEmail, 'function');
       // FRONTEND_URL is used by both functions without touching Host headers
       assert.ok(env.frontendUrl, 'FRONTEND_URL must be configured');
 

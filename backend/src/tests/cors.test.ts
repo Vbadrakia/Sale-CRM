@@ -13,15 +13,15 @@ export async function runCorsTests() {
     return allowedOrigins.includes(origin) || (Boolean(frontendUrl) && origin === frontendUrl);
   }
 
-  const configuredFrontend = 'https://crm.vedantbadrakia07.workers.dev';
+  const configuredFrontend = 'https://crm.example.com';
   const allowedOrigins = [
-    'https://crm.vedantbadrakia07.workers.dev',
+    'https://crm.example.com',
     'http://localhost:5173',
   ];
 
   // Test 1: Exact production origin -> Allowed
   {
-    const origin = 'https://crm.vedantbadrakia07.workers.dev';
+    const origin = 'https://crm.example.com';
     const allowed = checkCorsOrigin(origin, allowedOrigins, configuredFrontend);
     assert.equal(allowed, true, 'Exact production origin must be allowed');
     console.log('✓ Exact production origin allowed');
@@ -45,7 +45,7 @@ export async function runCorsTests() {
 
   // Test 4: Substring prefix attack -> Rejected
   {
-    const evilPrefix = 'https://evil-crm.vedantbadrakia07.workers.dev';
+    const evilPrefix = 'https://evil-crm.example.com';
     const allowed = checkCorsOrigin(evilPrefix, allowedOrigins, configuredFrontend);
     assert.equal(allowed, false, 'Prefix substring matching must be rejected');
     console.log('✓ Substring prefix attack rejected');
@@ -53,7 +53,7 @@ export async function runCorsTests() {
 
   // Test 5: Subdomain wrapper attack (attacker domain wrapping trusted name) -> Rejected
   {
-    const evilWrapper = 'https://crm.vedantbadrakia07.workers.dev.attacker.com';
+    const evilWrapper = 'https://crm.example.com.attacker.com';
     const allowed = checkCorsOrigin(evilWrapper, allowedOrigins, configuredFrontend);
     assert.equal(allowed, false, 'Attacker domain containing trusted host as substring must be rejected');
     console.log('✓ Domain wrapper attack rejected');
