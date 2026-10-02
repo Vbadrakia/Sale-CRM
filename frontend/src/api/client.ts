@@ -2,6 +2,7 @@ import type { Pagination } from '@/types';
 
 const API_URL = (import.meta.env.VITE_API_URL as string | undefined) ?? '/api';
 const TOKEN_KEY = 'crm.token';
+export const USE_COOKIE_AUTH = (import.meta.env.VITE_USE_COOKIE_AUTH as string | undefined) === 'true';
 // Database calls can make a small, bounded number of connection retries on a
 // cold Worker. Keep the browser budget above that server-side window.
 const DEFAULT_REQUEST_TIMEOUT_MS = 45_000;
@@ -71,7 +72,9 @@ try {
 }
 
 export const tokenStore = {
+  usesCookieAuth: USE_COOKIE_AUTH,
   get: (): string | null => {
+    if (USE_COOKIE_AUTH) return null;
     if (memoryToken) return memoryToken;
     try {
       if (typeof localStorage === 'undefined') return null;
@@ -84,6 +87,7 @@ export const tokenStore = {
     }
   },
   set: (token: string) => {
+    if (USE_COOKIE_AUTH) return;
     if (token && typeof token === 'string' && token !== 'undefined' && token !== 'null') {
       memoryToken = token;
       try {
@@ -136,7 +140,9 @@ function buildUrl(path: string, query?: RequestOptions['query']): string {
 
 export async function request<T>(path: string, options: RequestOptions = {}): Promise<{ data: T; pagination?: Pagination; message: string }> {
   const requestToken = tokenStore.get();
-  const headers: Record<string, string> = {};
+  const headers: Record<string, string> = {
+    'X-Requested-With': 'crm',
+  };
   if (requestToken) headers.Authorization = `Bearer ${requestToken}`;
   if (!options.formData) headers['Content-Type'] = 'application/json';
 
@@ -166,6 +172,7 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
       response = await fetch(buildUrl(path, options.query), {
         method,
         headers,
+        credentials: 'include',
         body: options.formData ?? (options.body !== undefined ? JSON.stringify(options.body) : undefined),
         signal,
       });
@@ -249,7 +256,7 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
     // Stale requests from previous sessions or unauthenticated requests must never invalidate the active token.
     const currentToken = tokenStore.get();
     const isMatchingToken = Boolean(requestToken && currentToken === requestToken);
-    const isSessionInvalid = !isAuthBypass && Boolean(errCode && AUTH_INVALIDATION_CODES.has(errCode)) && isMatchingToken;
+    const isSessionInvalid = !isAuthBypass && Boolean(errCode && AUTH_INVALIDATION_CODES.has(errCode)) && (USE_COOKIE_AUTH || isMatchingToken);
 
     if (isSessionInvalid) {
       console.warn(`[API] Session invalidation triggered by ${path}: status=${response.status}, code=${errCode}, reqId=${requestId}`);
@@ -265,10 +272,15 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
 /** Downloads a file from an authenticated endpoint. */
 export async function downloadFile(path: string, fileName: string): Promise<void> {
   const requestToken = tokenStore.get();
-  const headers: Record<string, string> = {};
+  const headers: Record<string, string> = {
+    'X-Requested-With': 'crm',
+  };
   if (requestToken) headers.Authorization = `Bearer ${requestToken}`;
 
-  const response = await fetch(`${API_URL}${path}`, { headers });
+  const response = await fetch(`${API_URL}${path}`, {
+    headers,
+    credentials: 'include',
+  });
   const requestId = response.headers.get('x-request-id') ?? undefined;
 
   if (!response.ok) {
@@ -285,7 +297,7 @@ export async function downloadFile(path: string, fileName: string): Promise<void
 
     const currentToken = tokenStore.get();
     const isMatchingToken = Boolean(requestToken && currentToken === requestToken);
-    const isSessionInvalid = Boolean(errCode && AUTH_INVALIDATION_CODES.has(errCode)) && isMatchingToken;
+    const isSessionInvalid = Boolean(errCode && AUTH_INVALIDATION_CODES.has(errCode)) && (USE_COOKIE_AUTH || isMatchingToken);
 
     if (isSessionInvalid) {
       onUnauthorized?.(errCode);

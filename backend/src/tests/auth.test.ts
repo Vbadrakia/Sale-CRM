@@ -5,6 +5,7 @@ import { signAuthToken, verifyAuthToken } from '../utils/jwt';
 import { env } from '../config/env';
 import { User } from '../models';
 import { ApiError } from '../utils/ApiError';
+import { setAuthCookie, clearAuthCookie, AUTH_COOKIE_NAME } from '../utils/cookies';
 import type { Request, Response, NextFunction } from 'express';
 
 export async function runAuthTests() {
@@ -275,6 +276,252 @@ export async function runAuthTests() {
       });
       assert.equal(adminDenied, true, 'requireBDE should reject ADMIN');
       console.log('✓ Role guards (requireAdmin, requireBDE) strictly enforced');
+    }
+
+    // --- Cookie Authentication & CSRF Protection (Task Item 10) ---
+
+    // Test 14: Cookie auth disabled by default
+    {
+      assert.equal(env.cookieAuth.enabled, false, 'Cookie auth must be disabled by default');
+      const req = { headers: {}, secure: false } as unknown as Request;
+      let cookieCalled = false;
+      const res = {
+        cookie: () => { cookieCalled = true; },
+      } as unknown as Response;
+      setAuthCookie(req, res, 'dummy-token');
+      assert.equal(cookieCalled, false, 'setAuthCookie must not set cookie when disabled');
+
+      // authenticate with cookie header when disabled -> 401 AUTH_REQUIRED
+      const cookieMock = {
+        headers: { cookie: `${AUTH_COOKIE_NAME}=dummy-token` },
+        method: 'GET',
+      } as unknown as Request;
+      let authErr: unknown = null;
+      await authenticate(cookieMock, {} as Response, (err?: unknown) => { authErr = err; });
+      assert.ok(authErr instanceof ApiError);
+      assert.equal((authErr as ApiError).statusCode, 401);
+      assert.equal((authErr as ApiError).code, 'AUTH_REQUIRED');
+      console.log('✓ Cookie auth disabled by default and ignored when feature flag is OFF');
+    }
+
+    // Test 15: Cookie auth enabled: setAuthCookie sets httpOnly session cookie
+    {
+      interface MockCookieOptions {
+        httpOnly?: boolean;
+        secure?: boolean;
+        sameSite?: string;
+        path?: string;
+        maxAge?: number;
+      }
+      const prevFlag = env.cookieAuth.enabled;
+      env.cookieAuth.enabled = true;
+      try {
+        const req = { headers: {}, secure: false } as unknown as Request;
+        const cookieRecord: { name: string; val: string; opts: MockCookieOptions | null } = {
+          name: '',
+          val: '',
+          opts: null,
+        };
+        const res = {
+          cookie: (name: string, val: string, opts?: MockCookieOptions) => {
+            cookieRecord.name = name;
+            cookieRecord.val = val;
+            cookieRecord.opts = opts ?? null;
+          },
+        } as unknown as Response;
+
+        setAuthCookie(req, res, 'sample-jwt-token-string');
+        assert.equal(cookieRecord.name, AUTH_COOKIE_NAME);
+        assert.equal(cookieRecord.val, 'sample-jwt-token-string');
+        assert.ok(cookieRecord.opts, 'Cookie options must be defined');
+        assert.equal(cookieRecord.opts.httpOnly, true, 'Cookie must be HttpOnly');
+        assert.equal(cookieRecord.opts.secure, true, 'Cookie must be Secure in production/test');
+        assert.equal(cookieRecord.opts.sameSite, 'lax', 'Cookie must have SameSite=Lax');
+        assert.equal(cookieRecord.opts.path, '/api', 'Cookie path must be /api');
+        assert.equal(cookieRecord.opts.maxAge, 24 * 60 * 60 * 1000, 'Cookie maxAge must be 24h');
+        console.log('✓ Cookie auth enabled: setAuthCookie sets HttpOnly, Secure, SameSite=Lax, Path=/api cookie');
+      } finally {
+        env.cookieAuth.enabled = prevFlag;
+      }
+    }
+
+    // Test 16: clearAuthCookie clears crm_session cookie on logout
+    {
+      interface MockClearOptions {
+        httpOnly?: boolean;
+        secure?: boolean;
+        sameSite?: string;
+        path?: string;
+      }
+      const req = { headers: {}, secure: false } as unknown as Request;
+      const clearRecord: { name: string; opts: MockClearOptions | null } = {
+        name: '',
+        opts: null,
+      };
+      const res = {
+        clearCookie: (name: string, opts?: MockClearOptions) => {
+          clearRecord.name = name;
+          clearRecord.opts = opts ?? null;
+        },
+      } as unknown as Response;
+
+      clearAuthCookie(req, res);
+      assert.equal(clearRecord.name, AUTH_COOKIE_NAME);
+      assert.ok(clearRecord.opts, 'Clear cookie options must be defined');
+      assert.equal(clearRecord.opts.path, '/api');
+      assert.equal(clearRecord.opts.httpOnly, true);
+      assert.equal(clearRecord.opts.sameSite, 'lax');
+      console.log('✓ clearAuthCookie properly invalidates session cookie on /api');
+    }
+
+    // Test 17: authenticate reads crm_session cookie on GET request
+    {
+      const prevFlag = env.cookieAuth.enabled;
+      env.cookieAuth.enabled = true;
+      try {
+        User.findByPk = (async () => ({
+          id: 201,
+          email: 'cookieuser@example.com',
+          role: 'BDE',
+          isActive: true,
+          emailVerified: true,
+          tokenVersion: 1,
+        })) as unknown as typeof User.findByPk;
+
+        const token = signAuthToken({ id: 201, email: 'cookieuser@example.com', role: 'BDE', tokenVersion: 1 });
+        const req = {
+          method: 'GET',
+          headers: {
+            cookie: `${AUTH_COOKIE_NAME}=${token}`,
+          },
+        } as unknown as Request;
+        let nextErr: unknown = null;
+        let nextCalled = false;
+        await authenticate(req, {} as Response, (err?: unknown) => {
+          nextCalled = true;
+          nextErr = err ?? null;
+        });
+        assert.equal(nextCalled, true);
+        assert.equal(nextErr, null);
+        assert.equal(req.user?.id, 201);
+        console.log('✓ authenticate middleware accepts valid crm_session cookie on GET requests');
+      } finally {
+        env.cookieAuth.enabled = prevFlag;
+      }
+    }
+
+    // Test 18: CSRF protection enforces X-Requested-With: crm on state-changing requests
+    {
+      const prevFlag = env.cookieAuth.enabled;
+      env.cookieAuth.enabled = true;
+      try {
+        User.findByPk = (async () => ({
+          id: 201,
+          email: 'cookieuser@example.com',
+          role: 'BDE',
+          isActive: true,
+          emailVerified: true,
+          tokenVersion: 1,
+        })) as unknown as typeof User.findByPk;
+
+        const token = signAuthToken({ id: 201, email: 'cookieuser@example.com', role: 'BDE', tokenVersion: 1 });
+
+        for (const method of ['POST', 'PUT', 'PATCH', 'DELETE']) {
+          const reqNoHeader = {
+            method,
+            headers: {
+              cookie: `${AUTH_COOKIE_NAME}=${token}`,
+            },
+          } as unknown as Request;
+          let postErr: unknown = null;
+          await authenticate(reqNoHeader, {} as Response, (err?: unknown) => { postErr = err; });
+          assert.ok(postErr instanceof ApiError, `Expected CSRF rejection for ${method}`);
+          assert.equal((postErr as ApiError).statusCode, 403);
+          assert.equal((postErr as ApiError).code, 'CSRF_INVALID');
+
+          const reqBadHeader = {
+            method,
+            headers: {
+              cookie: `${AUTH_COOKIE_NAME}=${token}`,
+              'x-requested-with': 'XMLHttpRequest',
+            },
+          } as unknown as Request;
+          let badHeaderErr: unknown = null;
+          await authenticate(reqBadHeader, {} as Response, (err?: unknown) => { badHeaderErr = err; });
+          assert.ok(badHeaderErr instanceof ApiError);
+          assert.equal((badHeaderErr as ApiError).statusCode, 403);
+          assert.equal((badHeaderErr as ApiError).code, 'CSRF_INVALID');
+        }
+        console.log('✓ CSRF protection blocks state-changing cookie requests missing X-Requested-With: crm');
+      } finally {
+        env.cookieAuth.enabled = prevFlag;
+      }
+    }
+
+    // Test 19: CSRF protection allows state-changing requests when X-Requested-With: crm is present
+    {
+      const prevFlag = env.cookieAuth.enabled;
+      env.cookieAuth.enabled = true;
+      try {
+        User.findByPk = (async () => ({
+          id: 201,
+          email: 'cookieuser@example.com',
+          role: 'BDE',
+          isActive: true,
+          emailVerified: true,
+          tokenVersion: 1,
+        })) as unknown as typeof User.findByPk;
+
+        const token = signAuthToken({ id: 201, email: 'cookieuser@example.com', role: 'BDE', tokenVersion: 1 });
+
+        for (const method of ['POST', 'PUT', 'PATCH', 'DELETE']) {
+          const reqValid = {
+            method,
+            headers: {
+              cookie: `${AUTH_COOKIE_NAME}=${token}`,
+              'x-requested-with': 'crm',
+            },
+          } as unknown as Request;
+          let validErr: unknown = null;
+          await authenticate(reqValid, {} as Response, (err?: unknown) => { validErr = err ?? null; });
+          assert.equal(validErr, null, `${method} with X-Requested-With: crm must succeed`);
+          assert.equal(reqValid.user?.id, 201);
+        }
+        console.log('✓ CSRF protection permits state-changing cookie requests with X-Requested-With: crm');
+      } finally {
+        env.cookieAuth.enabled = prevFlag;
+      }
+    }
+
+    // Test 20: Bearer token auth in Authorization header does not require X-Requested-With
+    {
+      const prevFlag = env.cookieAuth.enabled;
+      env.cookieAuth.enabled = true;
+      try {
+        User.findByPk = (async () => ({
+          id: 201,
+          email: 'cookieuser@example.com',
+          role: 'BDE',
+          isActive: true,
+          emailVerified: true,
+          tokenVersion: 1,
+        })) as unknown as typeof User.findByPk;
+
+        const token = signAuthToken({ id: 201, email: 'cookieuser@example.com', role: 'BDE', tokenVersion: 1 });
+        const reqBearer = {
+          method: 'POST',
+          headers: {
+            authorization: `Bearer ${token}`,
+          },
+        } as unknown as Request;
+        let bearerErr: unknown = null;
+        await authenticate(reqBearer, {} as Response, (err?: unknown) => { bearerErr = err ?? null; });
+        assert.equal(bearerErr, null, 'Bearer token auth does not require X-Requested-With');
+        assert.equal(reqBearer.user?.id, 201);
+        console.log('✓ Bearer token header auth operates without CSRF header requirement');
+      } finally {
+        env.cookieAuth.enabled = prevFlag;
+      }
     }
   } finally {
     User.findByPk = originalFindByPk;

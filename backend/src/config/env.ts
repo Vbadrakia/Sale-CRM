@@ -123,10 +123,23 @@ export const env = {
     enabled: String(process.env.ENABLE_JOBS || 'true') === 'true',
     reminderLeadMinutes: Number(process.env.FOLLOWUP_REMINDER_LEAD_MINUTES || 60),
   },
+
+  cookieAuth: {
+    enabled: String(process.env.ENABLE_COOKIE_AUTH || process.env.USE_COOKIE_AUTH || 'false') === 'true',
+    cookieName: 'crm_session',
+    maxAgeMs: 24 * 60 * 60 * 1000,
+  },
 };
 
 export function updateRuntimeEnv(envBindings: Record<string, unknown>): void {
   if (!envBindings) return;
+  if (typeof envBindings.ENABLE_COOKIE_AUTH !== 'undefined') {
+    process.env.ENABLE_COOKIE_AUTH = String(envBindings.ENABLE_COOKIE_AUTH);
+    env.cookieAuth.enabled = String(envBindings.ENABLE_COOKIE_AUTH) === 'true';
+  } else if (typeof envBindings.USE_COOKIE_AUTH !== 'undefined') {
+    process.env.USE_COOKIE_AUTH = String(envBindings.USE_COOKIE_AUTH);
+    env.cookieAuth.enabled = String(envBindings.USE_COOKIE_AUTH) === 'true';
+  }
   if (typeof envBindings.NODE_ENV === 'string' && envBindings.NODE_ENV) {
     env.nodeEnv = envBindings.NODE_ENV;
     env.isProduction = envBindings.NODE_ENV === 'production';

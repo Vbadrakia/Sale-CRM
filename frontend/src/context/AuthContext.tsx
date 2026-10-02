@@ -61,7 +61,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     const promise = (async () => {
       const token = tokenStore.get();
-      if (!token) {
+      if (!token && !tokenStore.usesCookieAuth) {
         if (currentReqId === authRequestIdRef.current) {
           setUser(null);
           setSessionState('SIGNED_OUT');

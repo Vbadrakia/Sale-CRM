@@ -4,6 +4,8 @@ import { ApiError } from '../utils/ApiError';
 import { User } from '../models';
 import { UserRole, AuthUserPayload } from '../types';
 import { withDbRetry } from '../config/database';
+import { env } from '../config/env';
+import { AUTH_COOKIE_NAME, parseCookies } from '../utils/cookies';
 
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace
@@ -52,12 +54,36 @@ function pruneExpiredAuthCache(now: number) {
  */
 export async function authenticate(req: Request, _res: Response, next: NextFunction) {
   try {
+    let token: string | undefined;
+    let isFromCookie = false;
+
     const header = req.headers.authorization;
-    if (!header || !header.startsWith('Bearer ')) {
+    if (header && header.startsWith('Bearer ')) {
+      token = header.slice(7).trim();
+    } else if (env.cookieAuth.enabled) {
+      const cookies = parseCookies(req.headers.cookie);
+      if (cookies[AUTH_COOKIE_NAME]) {
+        token = cookies[AUTH_COOKIE_NAME];
+        isFromCookie = true;
+      }
+    }
+
+    if (!token) {
       return next(ApiError.unauthorized('Authentication required', 'AUTH_REQUIRED'));
     }
 
-    const token = header.slice(7).trim();
+    // CSRF protection: When cookie auth is used on state-changing requests (POST/PUT/PATCH/DELETE), enforce custom header X-Requested-With: crm
+    if (isFromCookie) {
+      const method = (req.method || 'GET').toUpperCase();
+      const isStateChanging = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method);
+      if (isStateChanging) {
+        const rawRequestedWith = req.headers['x-requested-with'];
+        const requestedWith = Array.isArray(rawRequestedWith) ? rawRequestedWith[0] : rawRequestedWith;
+        if (!requestedWith || requestedWith.toLowerCase() !== 'crm') {
+          return next(ApiError.forbidden('CSRF protection: missing or invalid X-Requested-With header', 'CSRF_INVALID'));
+        }
+      }
+    }
     let payload: AuthUserPayload;
 
     // Step 1: Verify JWT signature & expiration (pinned to HS256)
