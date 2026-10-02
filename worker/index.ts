@@ -226,10 +226,20 @@ export default {
     try {
       const result = await runFollowUpReminderJob();
       console.log(`[cron] follow-up reminders: ${result.reminders}, overdue: ${result.overdue}`);
+    } catch (err) {
+      console.error('[cron] follow-up reminders job failed:', err);
+    }
+
+    try {
       await runImportRetentionJob();
+    } catch (err) {
+      console.error('[cron] import retention job failed:', err);
+    }
+
+    try {
       await runRateLimitRetentionJob();
     } catch (err) {
-      console.error('[cron] scheduled job failed:', err);
+      console.error('[cron] rate limit retention job failed:', err);
     }
   },
 };
