@@ -446,5 +446,40 @@ export async function runSecurityTests() {
 
     console.log('✓ Secrets, Worker env sync, and safe health check jwt status reporting verified');
   }
+
+  // Test 10: Migration Ordering, Alias Idempotency, and Trigram Extension Opclass Resolution (Item 7)
+  {
+    const fs = await import('fs');
+    const path = await import('path');
+    const { MIGRATIONS_LIST, MIGRATION_ALIASES } = await import('../services/dbMigration.service');
+
+    // 10A: Migrations directory has unique, ordered prefixes
+    const migrationsDir = path.join(__dirname, '..', '..', '..', 'supabase', 'migrations');
+    const files = fs.readdirSync(migrationsDir).filter((f) => f.endsWith('.sql')).sort();
+
+    assert.ok(files.includes('0002a_lockdown_rls.sql'), '0002a_lockdown_rls.sql exists');
+    assert.ok(files.includes('0002b_token_version_idempotency.sql'), '0002b_token_version_idempotency.sql exists');
+    assert.ok(files.includes('0005_trgm_search_indexes.sql'), '0005_trgm_search_indexes.sql exists');
+    assert.equal(files.includes('0002_lockdown_rls.sql'), false, 'Legacy duplicate 0002 prefix removed');
+
+    // 10B: MIGRATIONS_LIST in dbMigration service has unique prefixes and matches files
+    const versions = MIGRATIONS_LIST.map((m) => m.version);
+    const uniqueVersions = new Set(versions);
+    assert.equal(versions.length, uniqueVersions.size, 'All migration versions in MIGRATIONS_LIST must be unique');
+    assert.ok(versions.includes('0002a_lockdown_rls.sql'));
+    assert.ok(versions.includes('0002b_token_version_idempotency.sql'));
+    assert.ok(versions.includes('0005_trgm_search_indexes.sql'));
+
+    // 10C: Legacy aliases map old filenames to new ones safely
+    assert.equal(MIGRATION_ALIASES['0002a_lockdown_rls.sql'], '0002_lockdown_rls.sql');
+    assert.equal(MIGRATION_ALIASES['0002b_token_version_idempotency.sql'], '0002_token_version_idempotency.sql');
+
+    // 10D: 0005_trgm_search_indexes.sql resolves pg_trgm and opclass safely on Supabase
+    const trgmSql = fs.readFileSync(path.join(migrationsDir, '0005_trgm_search_indexes.sql'), 'utf8');
+    assert.ok(trgmSql.includes('extensions'), 'Trigram migration must support Supabase extensions schema');
+    assert.ok(trgmSql.includes('gin_trgm_ops'), 'Trigram migration must reference gin_trgm_ops');
+
+    console.log('✓ Migration ordering, idempotency aliases, and pg_trgm extensions schema resolution verified');
+  }
 }
 

@@ -377,12 +377,50 @@ BEGIN
 END $$;
 `;
 
+const MIGRATION_0005 = `
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'extensions') THEN
+    CREATE EXTENSION IF NOT EXISTS pg_trgm WITH SCHEMA extensions;
+  ELSE
+    CREATE EXTENSION IF NOT EXISTS pg_trgm;
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  BEGIN
+    EXECUTE 'CREATE INDEX IF NOT EXISTS idx_leads_company_name_trgm ON leads USING gin (company_name gin_trgm_ops)';
+  EXCEPTION WHEN undefined_object THEN
+    EXECUTE 'CREATE INDEX IF NOT EXISTS idx_leads_company_name_trgm ON leads USING gin (company_name extensions.gin_trgm_ops)';
+  END;
+
+  BEGIN
+    EXECUTE 'CREATE INDEX IF NOT EXISTS idx_leads_contact_name_trgm ON leads USING gin (contact_name gin_trgm_ops)';
+  EXCEPTION WHEN undefined_object THEN
+    EXECUTE 'CREATE INDEX IF NOT EXISTS idx_leads_contact_name_trgm ON leads USING gin (contact_name extensions.gin_trgm_ops)';
+  END;
+
+  BEGIN
+    EXECUTE 'CREATE INDEX IF NOT EXISTS idx_leads_email_trgm ON leads USING gin (email gin_trgm_ops)';
+  EXCEPTION WHEN undefined_object THEN
+    EXECUTE 'CREATE INDEX IF NOT EXISTS idx_leads_email_trgm ON leads USING gin (email extensions.gin_trgm_ops)';
+  END;
+END $$;
+`;
+
+export const MIGRATION_ALIASES: Record<string, string> = {
+  '0002a_lockdown_rls.sql': '0002_lockdown_rls.sql',
+  '0002b_token_version_idempotency.sql': '0002_token_version_idempotency.sql',
+};
+
 export const MIGRATIONS_LIST: { version: string; sql: string }[] = [
   { version: '0001_init.sql', sql: MIGRATION_0001 },
-  { version: '0002_lockdown_rls.sql', sql: MIGRATION_0002_LOCKDOWN_RLS },
-  { version: '0002_token_version_idempotency.sql', sql: MIGRATION_0002 },
+  { version: '0002a_lockdown_rls.sql', sql: MIGRATION_0002_LOCKDOWN_RLS },
+  { version: '0002b_token_version_idempotency.sql', sql: MIGRATION_0002 },
   { version: '0003_import_job_status_enum.sql', sql: MIGRATION_0003 },
   { version: '0004_rate_limits_and_retention.sql', sql: MIGRATION_0004 },
+  { version: '0005_trgm_search_indexes.sql', sql: MIGRATION_0005 },
 ];
 
 // 3. Execution function
@@ -413,7 +451,15 @@ export async function executeDatabaseMigrations(): Promise<{
   const results: MigrationResult[] = [];
 
   for (const mig of MIGRATIONS_LIST) {
-    if (appliedSet.has(mig.version)) {
+    const legacyAlias = MIGRATION_ALIASES[mig.version];
+    if (appliedSet.has(mig.version) || (legacyAlias && appliedSet.has(legacyAlias))) {
+      if (!appliedSet.has(mig.version)) {
+        await sequelize.query(
+          `INSERT INTO schema_migrations (version, applied_at) VALUES (:version, CURRENT_TIMESTAMP) ON CONFLICT (version) DO NOTHING;`,
+          { replacements: { version: mig.version } },
+        );
+        appliedSet.add(mig.version);
+      }
       results.push({ version: mig.version, status: 'already_applied' });
       continue;
     }
@@ -422,15 +468,18 @@ export async function executeDatabaseMigrations(): Promise<{
       if (mig.version === '0001_init.sql') {
         const [usersTable] = await sequelize.query(
           `SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'users';`,
-          { type: QueryTypes.SELECT }
+          { type: QueryTypes.SELECT },
         );
         if (!usersTable) {
           await sequelize.query(mig.sql);
         }
-      } else if (mig.version === '0002_token_version_idempotency.sql') {
+      } else if (
+        mig.version === '0002b_token_version_idempotency.sql' ||
+        mig.version === '0002_token_version_idempotency.sql'
+      ) {
         const [tokenCol] = await sequelize.query(
           `SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'users' AND column_name = 'token_version';`,
-          { type: QueryTypes.SELECT }
+          { type: QueryTypes.SELECT },
         );
         if (!tokenCol) {
           await sequelize.query(mig.sql);
@@ -443,7 +492,7 @@ export async function executeDatabaseMigrations(): Promise<{
       } else if (mig.version === '0004_rate_limits_and_retention.sql') {
         const [rateLimitTable] = await sequelize.query(
           `SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'rate_limits';`,
-          { type: QueryTypes.SELECT }
+          { type: QueryTypes.SELECT },
         );
         if (!rateLimitTable) {
           await sequelize.query(mig.sql);
@@ -531,14 +580,30 @@ export async function verifyDatabaseMigrations(): Promise<VerificationReport> {
     retentionIndexExists = false;
   }
 
-  const expectedMigrations = ['0001_init.sql', '0002_lockdown_rls.sql', '0002_token_version_idempotency.sql', '0003_import_job_status_enum.sql', '0004_rate_limits_and_retention.sql'];
+  const expectedMigrations = [
+    '0001_init.sql',
+    '0002a_lockdown_rls.sql',
+    '0002b_token_version_idempotency.sql',
+    '0003_import_job_status_enum.sql',
+    '0004_rate_limits_and_retention.sql',
+    '0005_trgm_search_indexes.sql',
+  ];
   const appliedVersions = new Set(schemaMigrations.map((m) => m.version));
-  const allMigrationsApplied = expectedMigrations.every((v) => appliedVersions.has(v));
-  const rlsLockdownApplied = appliedVersions.has('0002_lockdown_rls.sql');
+  const isMigApplied = (v: string) =>
+    appliedVersions.has(v) || Boolean(MIGRATION_ALIASES[v] && appliedVersions.has(MIGRATION_ALIASES[v]));
+  const allMigrationsApplied = expectedMigrations.every((v) => isMigApplied(v));
+  const rlsLockdownApplied = isMigApplied('0002a_lockdown_rls.sql');
   const hasCompletedWithErrors = importJobStatusEnum.includes('COMPLETED_WITH_ERRORS');
   const hasCancelled = importJobStatusEnum.includes('CANCELLED');
 
-  const isFullyMigrated = allMigrationsApplied && rlsLockdownApplied && rateLimitsTableExists && hasCompletedWithErrors && hasCancelled && tokenVersionColumnExists && retentionIndexExists;
+  const isFullyMigrated =
+    allMigrationsApplied &&
+    rlsLockdownApplied &&
+    rateLimitsTableExists &&
+    hasCompletedWithErrors &&
+    hasCancelled &&
+    tokenVersionColumnExists &&
+    retentionIndexExists;
 
   return {
     schemaMigrations,

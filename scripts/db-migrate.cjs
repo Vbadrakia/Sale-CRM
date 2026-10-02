@@ -102,10 +102,24 @@ async function migrate() {
       .filter((file) => file.endsWith('.sql'))
       .sort();
 
+    // Map new unique filenames to legacy filenames for backward compatibility
+    const MIGRATION_ALIASES = {
+      '0002a_lockdown_rls.sql': '0002_lockdown_rls.sql',
+      '0002b_token_version_idempotency.sql': '0002_token_version_idempotency.sql',
+    };
+
     let appliedCount = 0;
 
     for (const file of files) {
-      if (appliedVersions.has(file)) {
+      const legacyAlias = MIGRATION_ALIASES[file];
+      if (appliedVersions.has(file) || (legacyAlias && appliedVersions.has(legacyAlias))) {
+        if (!appliedVersions.has(file)) {
+          await client.query(
+            'INSERT INTO schema_migrations (version) VALUES ($1) ON CONFLICT (version) DO NOTHING',
+            [file],
+          );
+          appliedVersions.add(file);
+        }
         continue;
       }
 
