@@ -88,6 +88,102 @@ export interface ParsedSheet {
   rows: Record<string, unknown>[];
 }
 
+export const MAX_ZIP_UNCOMPRESSED_BYTES = 25 * 1024 * 1024; // 25MB
+export const MAX_ZIP_ENTRIES = 200;
+export const MAX_ZIP_RATIO = 100;
+
+/**
+ * Validates zip central directory metadata before any decompression occurs.
+ * Protects against zip bombs (ratio > 100:1), oversized uncompressed size (> 25MB),
+ * and excessive entry counts (> 200 entries).
+ */
+export function validateZipArchive(buffer: Buffer): void {
+  if (buffer.length < 22) {
+    throw ApiError.badRequest('Invalid .xlsx file format: corrupt or invalid file structure');
+  }
+
+  // Find End of Central Directory (EOCD) record
+  // EOCD Signature: 0x06054b50 (PK\x05\x06)
+  let eocdOffset = -1;
+  const minOffset = Math.max(0, buffer.length - 65557);
+  for (let i = buffer.length - 22; i >= minOffset; i--) {
+    if (
+      buffer[i] === 0x50 &&
+      buffer[i + 1] === 0x4b &&
+      buffer[i + 2] === 0x05 &&
+      buffer[i + 3] === 0x06
+    ) {
+      eocdOffset = i;
+      break;
+    }
+  }
+
+  if (eocdOffset === -1) {
+    throw ApiError.badRequest('Invalid .xlsx file format: missing end of central directory');
+  }
+
+  const totalEntries = buffer.readUInt16LE(eocdOffset + 10);
+  const cdSize = buffer.readUInt32LE(eocdOffset + 12);
+  const cdOffset = buffer.readUInt32LE(eocdOffset + 16);
+
+  if (totalEntries > MAX_ZIP_ENTRIES) {
+    throw ApiError.badRequest(`Spreadsheet archive exceeds maximum permitted entry count (${MAX_ZIP_ENTRIES} entries)`);
+  }
+
+  if (cdOffset + cdSize > buffer.length || cdOffset < 0) {
+    throw ApiError.badRequest('Invalid .xlsx file format: corrupt zip central directory offset');
+  }
+
+  let currentPos = cdOffset;
+  let entryCount = 0;
+  let totalUncompressed = 0;
+
+  while (currentPos < cdOffset + cdSize) {
+    if (currentPos + 46 > buffer.length) {
+      throw ApiError.badRequest('Invalid .xlsx file format: truncated central directory header');
+    }
+
+    // Central Directory File Header Signature: 0x02014b50 (PK\x01\x02)
+    if (
+      buffer[currentPos] !== 0x50 ||
+      buffer[currentPos + 1] !== 0x4b ||
+      buffer[currentPos + 2] !== 0x01 ||
+      buffer[currentPos + 3] !== 0x02
+    ) {
+      throw ApiError.badRequest('Invalid .xlsx file format: corrupt central directory entry signature');
+    }
+
+    const compressedSize = buffer.readUInt32LE(currentPos + 20);
+    const uncompressedSize = buffer.readUInt32LE(currentPos + 24);
+    const fileNameLength = buffer.readUInt16LE(currentPos + 28);
+    const extraFieldLength = buffer.readUInt16LE(currentPos + 30);
+    const fileCommentLength = buffer.readUInt16LE(currentPos + 32);
+
+    if (uncompressedSize > 0) {
+      const ratio = uncompressedSize / Math.max(1, compressedSize);
+      if (compressedSize === 0 || ratio > MAX_ZIP_RATIO) {
+        throw ApiError.badRequest(
+          `Spreadsheet archive compression ratio exceeds maximum safe threshold (${MAX_ZIP_RATIO}:1)`,
+        );
+      }
+    }
+
+    totalUncompressed += uncompressedSize;
+    if (totalUncompressed > MAX_ZIP_UNCOMPRESSED_BYTES) {
+      throw ApiError.badRequest(
+        'Spreadsheet archive uncompressed size exceeds maximum permitted limit (25MB)',
+      );
+    }
+
+    entryCount++;
+    if (entryCount > MAX_ZIP_ENTRIES) {
+      throw ApiError.badRequest(`Spreadsheet archive exceeds maximum permitted entry count (${MAX_ZIP_ENTRIES} entries)`);
+    }
+
+    currentPos += 46 + fileNameLength + extraFieldLength + fileCommentLength;
+  }
+}
+
 /** Parses an uploaded buffer safely. Formulas are never evaluated. */
 export async function parseSpreadsheet(buffer: Buffer, fileName: string): Promise<ParsedSheet> {
   if (!buffer || buffer.length === 0) {
@@ -106,6 +202,11 @@ export async function parseSpreadsheet(buffer: Buffer, fileName: string): Promis
     throw ApiError.badRequest(`Could not read "${fileName}". The file appears to be malformed.`);
   }
 
+  // Validate zip structure for xlsx archives BEFORE XLSX.read parses or inflates entries
+  if (isXlsx || (isZip && !isOle)) {
+    validateZipArchive(buffer);
+  }
+
   const XLSX = await import('xlsx');
   let workbook: WorkBook;
   try {
@@ -114,9 +215,11 @@ export async function parseSpreadsheet(buffer: Buffer, fileName: string): Promis
       cellFormula: false, // never retain/execute formulas
       cellHTML: false,
       cellDates: false,
-raw: false,
+      raw: false,
+      sheetRows: 10001, // stop parsing early if sheet exceeds row bounds
     });
-  } catch {
+  } catch (readErr) {
+    if (readErr instanceof ApiError) throw readErr;
     throw ApiError.badRequest(`Could not read "${fileName}". The file appears to be malformed.`);
   }
 
@@ -124,10 +227,11 @@ raw: false,
   if (!sheetName) throw ApiError.badRequest('The uploaded file contains no worksheets');
   const sheet = workbook.Sheets[sheetName];
 
-  // Defensive check against spreadsheet dimension bombs
-  if (sheet && sheet['!ref']) {
+  // Defensive check against spreadsheet dimension bombs BEFORE materializing rows
+  const declaredRef = (sheet && (sheet['!fullref'] || sheet['!ref'])) as string | undefined;
+  if (sheet && declaredRef) {
     try {
-      const range = XLSX.utils.decode_range(sheet['!ref']);
+      const range = XLSX.utils.decode_range(declaredRef);
       const rowCount = range.e.r - range.s.r + 1;
       const colCount = range.e.c - range.s.c + 1;
       if (rowCount > 10000 || colCount > 100) {

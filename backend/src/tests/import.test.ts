@@ -208,4 +208,90 @@ export async function runImportTests() {
       ImportError.destroy = origDestroy;
     }
   }
+
+  // Test 8: High compression ratio zip bomb fixture rejected with 400 Bad Request
+  {
+    const filename = 'content.xml';
+    const nameBuf = Buffer.from(filename, 'utf8');
+    const dummyPayload = Buffer.alloc(10);
+    const uncompressedSize = 100_000; // 100,000 / 10 = 10,000:1 ratio (> 100:1)
+
+    const localHeader = Buffer.alloc(30 + nameBuf.length + dummyPayload.length);
+    localHeader.writeUInt32LE(0x04034b50, 0); // Local header signature
+    localHeader.writeUInt16LE(20, 4);
+    localHeader.writeUInt16LE(0, 6);
+    localHeader.writeUInt16LE(8, 8); // Deflate
+    localHeader.writeUInt16LE(0, 10);
+    localHeader.writeUInt16LE(0, 12);
+    localHeader.writeUInt32LE(0, 14);
+    localHeader.writeUInt32LE(dummyPayload.length, 18);
+    localHeader.writeUInt32LE(uncompressedSize, 22);
+    localHeader.writeUInt16LE(nameBuf.length, 26);
+    localHeader.writeUInt16LE(0, 28);
+    nameBuf.copy(localHeader, 30);
+    dummyPayload.copy(localHeader, 30 + nameBuf.length);
+
+    const cdHeader = Buffer.alloc(46 + nameBuf.length);
+    cdHeader.writeUInt32LE(0x02014b50, 0); // Central directory entry signature
+    cdHeader.writeUInt16LE(20, 4);
+    cdHeader.writeUInt16LE(20, 6);
+    cdHeader.writeUInt16LE(0, 8);
+    cdHeader.writeUInt16LE(8, 10);
+    cdHeader.writeUInt16LE(0, 12);
+    cdHeader.writeUInt16LE(0, 14);
+    cdHeader.writeUInt32LE(0, 16);
+    cdHeader.writeUInt32LE(dummyPayload.length, 20);
+    cdHeader.writeUInt32LE(uncompressedSize, 24);
+    cdHeader.writeUInt16LE(nameBuf.length, 28);
+    cdHeader.writeUInt16LE(0, 30);
+    cdHeader.writeUInt16LE(0, 32);
+    cdHeader.writeUInt16LE(0, 34);
+    cdHeader.writeUInt16LE(0, 36);
+    cdHeader.writeUInt32LE(0, 38);
+    cdHeader.writeUInt32LE(0, 42); // local header offset
+    nameBuf.copy(cdHeader, 46);
+
+    const eocd = Buffer.alloc(22);
+    eocd.writeUInt32LE(0x06054b50, 0); // EOCD signature
+    eocd.writeUInt16LE(0, 4);
+    eocd.writeUInt16LE(0, 6);
+    eocd.writeUInt16LE(1, 8);
+    eocd.writeUInt16LE(1, 10);
+    eocd.writeUInt32LE(cdHeader.length, 12);
+    eocd.writeUInt32LE(localHeader.length, 16);
+    eocd.writeUInt16LE(0, 20);
+
+    const zipBombBuffer = Buffer.concat([localHeader, cdHeader, eocd]);
+
+    await assert.rejects(
+      async () => await parseSpreadsheet(zipBombBuffer, 'bomb.xlsx'),
+      (err: unknown) => {
+        assert.ok(err instanceof ApiError);
+        assert.equal((err as ApiError).statusCode, 400);
+        assert.ok((err as ApiError).message.includes('compression ratio exceeds maximum safe threshold'));
+        return true;
+      }
+    );
+    console.log('✓ High compression ratio zip bomb fixture correctly rejected before XLSX parsing');
+  }
+
+  // Test 9: Oversized spreadsheet dimensions (>10,000 rows or >100 columns) rejected with 400
+  {
+    const ws = XLSX.utils.aoa_to_sheet([['Company Name', 'Contact Person']]);
+    ws['!ref'] = 'A1:B10005'; // Declared 10,005 rows (> 10,000 max)
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Sheet1');
+    const oversizedBuffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+
+    await assert.rejects(
+      async () => await parseSpreadsheet(oversizedBuffer, 'oversized.xlsx'),
+      (err: unknown) => {
+        assert.ok(err instanceof ApiError);
+        assert.equal((err as ApiError).statusCode, 400);
+        assert.ok((err as ApiError).message.includes('exceeds maximum permitted dimensions'));
+        return true;
+      }
+    );
+    console.log('✓ Oversized spreadsheet dimensions (>10,000 rows) correctly rejected before materializing rows');
+  }
 }

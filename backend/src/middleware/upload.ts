@@ -3,6 +3,7 @@ import type { Request, Response, NextFunction } from 'express';
 import multer from 'multer';
 import { env } from '../config/env';
 import { ApiError } from '../utils/ApiError';
+import { validateZipArchive } from '../services/import.service';
 
 const ALLOWED_EXTENSIONS = ['.csv', '.xls', '.xlsx'];
 const ALLOWED_MIME_TYPES = [
@@ -45,6 +46,11 @@ export function spreadsheetUpload(req: Request, res: Response, next: NextFunctio
       const isZip = buffer.length >= 4 && buffer[0] === 0x50 && buffer[1] === 0x4b;
       if (!isZip) {
         return next(ApiError.badRequest('Invalid .xlsx file format: corrupt or invalid file signature'));
+      }
+      try {
+        validateZipArchive(buffer);
+      } catch (zipErr) {
+        return next(zipErr);
       }
     } else if (ext === '.xls') {
       const isOle = buffer.length >= 8 && buffer[0] === 0xd0 && buffer[1] === 0xcf;
