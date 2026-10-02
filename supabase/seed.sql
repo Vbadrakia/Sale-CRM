@@ -5,6 +5,15 @@
 -- Demo accounts use bcrypt cost 12 hash for 'Password123'
 -- IMPORTANT: Verify that demo accounts (admin@crm.local, sam@crm.local) are NEVER deployed to production.
 
+-- Guard: Refuse execution if connected to production without ALLOW_SEED
+DO $$
+BEGIN
+  IF (current_database() ILIKE '%prod%' OR current_setting('crm.production', true) = 'true')
+     AND current_setting('crm.allow_seed', true) IS DISTINCT FROM 'true' THEN
+    RAISE EXCEPTION 'CRITICAL SECURITY ERROR: Seeding demo data into a production database is prohibited! Set crm.allow_seed = true to override.';
+  END IF;
+END $$;
+
 INSERT INTO users (first_name, last_name, email, phone, password_hash, role, is_active, email_verified)
 VALUES 
 ('Ava', 'Admin', 'admin@crm.local', '+911234567890', '$2a$12$0PWo7H.mtdsAcXKwcpX7HOMv9WBgtgDrnLY278eAmDnj.Gr50ESJK', 'ADMIN', true, true),

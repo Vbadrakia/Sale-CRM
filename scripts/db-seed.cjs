@@ -6,10 +6,56 @@ const { Client } = require('pg');
 require('dotenv').config({ path: path.join(__dirname, '..', 'backend', '.env') });
 require('dotenv').config();
 
-if (process.env.NODE_ENV === 'production' && !process.env.ALLOW_PRODUCTION_SEED) {
-  console.error('[db-seed] ERROR: Refusing to seed demo data into a production database.');
-  console.error('[db-seed] Demo credentials and mock leads must never be injected into production.');
-  process.exit(1);
+function getDbHost() {
+  const rawUrl = process.env.DATABASE_URL || '';
+  if (rawUrl) {
+    try {
+      const parsed = new URL(rawUrl);
+      return parsed.hostname;
+    } catch {
+      const match = rawUrl.match(/@([^:/]+)/);
+      if (match) return match[1];
+    }
+  }
+  return process.env.DB_HOST || '127.0.0.1';
+}
+
+function isLocalOrStagingHost(host) {
+  if (!host) return false;
+  const h = host.toLowerCase();
+  return (
+    h === 'localhost' ||
+    h === '127.0.0.1' ||
+    h === '::1' ||
+    h.includes('local') ||
+    h.includes('staging') ||
+    h.includes('stage') ||
+    h.includes('test')
+  );
+}
+
+const targetHost = getDbHost();
+const isProd = process.env.NODE_ENV === 'production';
+const isLocalOrStaging = isLocalOrStagingHost(targetHost);
+const allowSeed = process.env.ALLOW_SEED === 'true';
+
+if (isProd || !isLocalOrStaging) {
+  if (!allowSeed) {
+    console.error('\n' + '='.repeat(80));
+    console.error('  [SECURITY ERROR] SEED DATA INJECTION REFUSED');
+    console.error(`  Target DB Host: ${targetHost} | NODE_ENV: ${process.env.NODE_ENV || 'development'}`);
+    console.error('  Refusing to seed demo data when NODE_ENV=production or host is not local/staging.');
+    console.error('  Demo credentials (admin@crm.local) must never be injected into production.');
+    console.error('  To override explicitly (e.g. for staging), you must set: ALLOW_SEED=true');
+    console.error('='.repeat(80) + '\n');
+    process.exit(1);
+  } else {
+    console.warn('\n' + '='.repeat(80));
+    console.warn('  [SECURITY WARNING] OVERRIDE ACTIVE: ALLOW_SEED=true');
+    console.warn(`  Target DB Host: ${targetHost} | NODE_ENV: ${process.env.NODE_ENV || 'development'}`);
+    console.warn('  Seeding demo accounts and mock data. Ensure this is not a live customer database!');
+    console.warn('='.repeat(80) + '\n');
+  }
 }
 
 function normalizeCaCert(cert) {

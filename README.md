@@ -67,3 +67,43 @@ If TLS verification fails at startup, health check, or migration, the system log
    ```bash
    npm run deploy
    ```
+
+---
+
+## Seed Data Safety & Demo Account Audit
+
+Development seed data (`supabase/seed.sql`) contains initial demo credentials (`admin@crm.local`, `sam@crm.local`) and sample leads.
+
+- `scripts/db-seed.cjs` strictly refuses to run if `NODE_ENV=production` or if the target database host is not local/staging, requiring an explicit `ALLOW_SEED=true` override.
+- Never run seed scripts against live production environments.
+
+### Auditing & Removing Demo Accounts in Production
+
+To check whether demo accounts or mock seed records exist in your database:
+
+```bash
+# Check for demo accounts (Read-only check)
+node scripts/check-prod-accounts.cjs
+
+# Remove demo accounts and sample seed records
+node scripts/check-prod-accounts.cjs --delete
+```
+
+#### SQL Snippet for Manual Verification / Deletion:
+
+```sql
+-- 1. Check for demo accounts
+SELECT id, email, role, is_active, created_at 
+FROM users 
+WHERE email IN ('admin@crm.local', 'sam@crm.local') OR email LIKE '%@crm.local';
+
+-- 2. Delete demo accounts and associated mock data
+BEGIN;
+DELETE FROM notifications WHERE user_id IN (SELECT id FROM users WHERE email IN ('admin@crm.local', 'sam@crm.local') OR email LIKE '%@crm.local');
+DELETE FROM activities WHERE user_id IN (SELECT id FROM users WHERE email IN ('admin@crm.local', 'sam@crm.local') OR email LIKE '%@crm.local');
+DELETE FROM followups WHERE assigned_to_id IN (SELECT id FROM users WHERE email IN ('admin@crm.local', 'sam@crm.local') OR email LIKE '%@crm.local');
+DELETE FROM leads WHERE lead_code LIKE 'LD-2026-%' OR assigned_bde_id IN (SELECT id FROM users WHERE email IN ('admin@crm.local', 'sam@crm.local') OR email LIKE '%@crm.local');
+DELETE FROM customers WHERE customer_code LIKE 'CU-2026-%' OR assigned_bde_id IN (SELECT id FROM users WHERE email IN ('admin@crm.local', 'sam@crm.local') OR email LIKE '%@crm.local');
+DELETE FROM users WHERE email IN ('admin@crm.local', 'sam@crm.local') OR email LIKE '%@crm.local';
+COMMIT;
+```

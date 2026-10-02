@@ -600,5 +600,33 @@ export async function runSecurityTests() {
       User.create = origUserCreate;
     }
   }
+
+  // Test 12: Seed Data Safety & Production Demo Account Checks (Item 9)
+  {
+    const fs = await import('fs');
+    const path = await import('path');
+
+    // 12A: seed.sql contains protective guard against production injection
+    const seedSqlPath = path.join(__dirname, '..', '..', '..', 'supabase', 'seed.sql');
+    const seedSql = fs.readFileSync(seedSqlPath, 'utf8');
+    assert.ok(seedSql.includes('crm.allow_seed'), 'seed.sql must require explicit crm.allow_seed setting');
+    assert.ok(seedSql.includes('RAISE EXCEPTION'), 'seed.sql must abort execution when in production without override');
+
+    // 12B: check-prod-accounts script exists and contains deletion logic
+    const auditScriptPath = path.join(__dirname, '..', '..', '..', 'scripts', 'check-prod-accounts.cjs');
+    assert.ok(fs.existsSync(auditScriptPath), 'scripts/check-prod-accounts.cjs must exist');
+    const auditScript = fs.readFileSync(auditScriptPath, 'utf8');
+    assert.ok(auditScript.includes('admin@crm.local'), 'audit script must target admin@crm.local');
+    assert.ok(auditScript.includes('sam@crm.local'), 'audit script must target sam@crm.local');
+    assert.ok(auditScript.includes('--delete'), 'audit script must support --delete flag');
+
+    // 12C: db-seed.cjs enforces ALLOW_SEED=true in production/non-local environments
+    const dbSeedPath = path.join(__dirname, '..', '..', '..', 'scripts', 'db-seed.cjs');
+    const dbSeed = fs.readFileSync(dbSeedPath, 'utf8');
+    assert.ok(dbSeed.includes('ALLOW_SEED'), 'db-seed.cjs must check ALLOW_SEED');
+    assert.ok(dbSeed.includes('isLocalOrStagingHost'), 'db-seed.cjs must check whether host is local or staging');
+
+    console.log('✓ Seed data safety, ALLOW_SEED guards, and demo accounts audit script verified');
+  }
 }
 
