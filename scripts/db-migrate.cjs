@@ -122,13 +122,6 @@ async function migrate() {
     for (const file of files) {
       const legacyAlias = MIGRATION_ALIASES[file];
       if (appliedVersions.has(file) || (legacyAlias && appliedVersions.has(legacyAlias))) {
-        if (!appliedVersions.has(file)) {
-          await client.query(
-            'INSERT INTO schema_migrations (version) VALUES ($1) ON CONFLICT (version) DO NOTHING',
-            [file],
-          );
-          appliedVersions.add(file);
-        }
         continue;
       }
 

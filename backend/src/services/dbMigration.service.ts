@@ -453,13 +453,6 @@ export async function executeDatabaseMigrations(): Promise<{
   for (const mig of MIGRATIONS_LIST) {
     const legacyAlias = MIGRATION_ALIASES[mig.version];
     if (appliedSet.has(mig.version) || (legacyAlias && appliedSet.has(legacyAlias))) {
-      if (!appliedSet.has(mig.version)) {
-        await sequelize.query(
-          `INSERT INTO schema_migrations (version, applied_at) VALUES (:version, CURRENT_TIMESTAMP) ON CONFLICT (version) DO NOTHING;`,
-          { replacements: { version: mig.version } },
-        );
-        appliedSet.add(mig.version);
-      }
       results.push({ version: mig.version, status: 'already_applied' });
       continue;
     }

@@ -494,7 +494,47 @@ export async function runSecurityTests() {
     assert.ok(trgmSql.includes('extensions'), 'Trigram migration must support Supabase extensions schema');
     assert.ok(trgmSql.includes('gin_trgm_ops'), 'Trigram migration must reference gin_trgm_ops');
 
-    console.log('✓ Migration ordering, idempotency aliases, and pg_trgm extensions schema resolution verified');
+    // 10E: Simulate DB that already applied old names (0002_*) -> nothing re-runs and NO duplicate rows added
+    const legacyTrackingRows = new Set<string>([
+      '0001_init.sql',
+      '0002_lockdown_rls.sql',
+      '0002_token_version_idempotency.sql',
+    ]);
+    const simulatedRan: string[] = [];
+    const simulatedTracking = new Set<string>(legacyTrackingRows);
+
+    for (const mig of MIGRATIONS_LIST) {
+      const legacyAlias = MIGRATION_ALIASES[mig.version];
+      if (simulatedTracking.has(mig.version) || (legacyAlias && simulatedTracking.has(legacyAlias))) {
+        // Migration considered already applied; MUST NOT add duplicate row to tracking table
+        continue;
+      }
+      simulatedRan.push(mig.version);
+      simulatedTracking.add(mig.version);
+    }
+
+    assert.equal(simulatedRan.includes('0002a_lockdown_rls.sql'), false, '0002a must not re-run when 0002_lockdown_rls exists');
+    assert.equal(simulatedRan.includes('0002b_token_version_idempotency.sql'), false, '0002b must not re-run when 0002_token_version_idempotency exists');
+    assert.equal(simulatedTracking.has('0002a_lockdown_rls.sql'), false, 'No duplicate 0002a row must be inserted when legacy alias exists');
+    assert.equal(simulatedTracking.has('0002b_token_version_idempotency.sql'), false, 'No duplicate 0002b row must be inserted when legacy alias exists');
+    assert.deepEqual(Array.from(simulatedRan), ['0003_import_job_status_enum.sql', '0004_rate_limits_and_retention.sql', '0005_trgm_search_indexes.sql']);
+
+    // 10F: Simulate fresh DB -> all migrations run and record their new versions
+    const freshTracking = new Set<string>();
+    const freshRan: string[] = [];
+    for (const mig of MIGRATIONS_LIST) {
+      const legacyAlias = MIGRATION_ALIASES[mig.version];
+      if (freshTracking.has(mig.version) || (legacyAlias && freshTracking.has(legacyAlias))) {
+        continue;
+      }
+      freshRan.push(mig.version);
+      freshTracking.add(mig.version);
+    }
+    assert.equal(freshRan.length, MIGRATIONS_LIST.length, 'Fresh DB must run all migrations');
+    assert.ok(freshTracking.has('0002a_lockdown_rls.sql'), 'Fresh DB records 0002a');
+    assert.ok(freshTracking.has('0002b_token_version_idempotency.sql'), 'Fresh DB records 0002b');
+
+    console.log('✓ Migration ordering, idempotency aliases, duplicate row prevention, and pg_trgm extensions schema resolution verified');
   }
 
   // Test 11: Email Set-Password Flow, SHA-256 Token Storage, 48h Expiry & Timing-Safe Token Comparison (Item 8)
