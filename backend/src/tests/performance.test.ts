@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { sequelize, withDbRetry } from '../config/database';
 import { overview, invalidateDashboardCache } from '../controllers/dashboard.controller';
-import { Lead, FollowUp, Customer, User } from '../models';
+import { updateLeadStatus } from '../controllers/lead.controller';
+import { Lead, FollowUp, Customer, User, Activity } from '../models';
 import type { Request, Response } from 'express';
 
 export async function runPerformanceTests() {
@@ -152,6 +153,125 @@ export async function runPerformanceTests() {
       FollowUp.findAll = origFollowUpFindAll;
       Customer.findAll = origCustomerFindAll;
       User.findAll = origUserFindAll;
+    }
+  }
+
+  // Test 4: Invalidation after lead status change ensures immediate fresh counts
+  {
+    const origLeadFindAll = Lead.findAll;
+    const origLeadFindByPk = Lead.findByPk;
+    const origFollowUpFindAll = FollowUp.findAll;
+    const origCustomerFindAll = Customer.findAll;
+    const origUserFindAll = User.findAll;
+    const origActivityCreate = Activity.create;
+
+    let leadFindAllCalls = 0;
+    let newStatusCount = 10;
+
+    try {
+      Activity.create = (async () => ({})) as unknown as typeof Activity.create;
+      Lead.findAll = (async (options: { attributes?: unknown[] }) => {
+        leadFindAllCalls++;
+        const attrs = options?.attributes || [];
+        if (attrs.includes('status')) {
+          return [
+            { status: 'NEW', total: String(newStatusCount) },
+            { status: 'WON', total: '5' },
+          ];
+        }
+        if (attrs.includes('leadSource')) {
+          return [{ leadSource: 'WEBSITE', total: '15' }];
+        }
+        if (attrs.includes('assignedBdeId')) {
+          return [{ assignedBdeId: 1, status: 'WON', total: '5' }];
+        }
+        return [{ month: '2026-09', total: '15' }];
+      }) as unknown as typeof Lead.findAll;
+
+      FollowUp.findAll = (async (options: { where?: { status?: string } }) => {
+        if (options?.where?.status === 'COMPLETED') {
+          return [{ assignedToId: 1, total: '3' }];
+        }
+        return [{ today: '2', upcoming: '4', overdue: '1', completed: '3' }];
+      }) as unknown as typeof FollowUp.findAll;
+
+      Customer.findAll = (async () => {
+        return [{ total: '5', newThisMonth: '2' }];
+      }) as unknown as typeof Customer.findAll;
+
+      User.findAll = (async () => {
+        return [
+          {
+            id: 1,
+            firstName: 'John',
+            lastName: 'Doe',
+            email: 'john@example.com',
+            role: 'BDE',
+            isActive: true,
+          },
+        ];
+      }) as unknown as typeof User.findAll;
+
+      invalidateDashboardCache();
+
+      let sentData: Record<string, unknown> | null = null;
+      const req = {
+        user: { id: 1, role: 'ADMIN', email: 'admin@example.com' },
+        id: 'perf-test-req-2',
+      } as unknown as Request;
+
+      const res = {
+        status(_code: number) { return res; },
+        json(data: { success: boolean; data: Record<string, unknown> }) {
+          sentData = data.data;
+          return res;
+        },
+      } as unknown as Response;
+
+      // 1. Initial overview populates cache with newStatusCount = 10
+      await overview(req, res);
+      const summaryInitial = ((sentData ?? {}) as Record<string, unknown>).summary as { leads: { NEW: number } };
+      assert.equal(summaryInitial.leads.NEW, 10, 'Initial count should be 10');
+      const callsBefore = leadFindAllCalls;
+
+      // 2. Perform lead status change via updateLeadStatus
+      const mockLead = {
+        id: 101,
+        leadCode: 'LEAD-101',
+        status: 'NEW',
+        assignedBdeId: 1,
+        save: async () => mockLead,
+      };
+      Lead.findByPk = (async () => mockLead) as unknown as typeof Lead.findByPk;
+
+      const updateReq = {
+        params: { id: '101' },
+        body: { status: 'CONTACTED' },
+        user: { id: 1, role: 'ADMIN', email: 'admin@example.com' },
+      } as unknown as Request;
+
+      const updateRes = {
+        status(_code: number) { return updateRes; },
+        json(_data: unknown) { return updateRes; },
+      } as unknown as Response;
+
+      newStatusCount = 9; // Simulate DB state update
+      await updateLeadStatus(updateReq, updateRes);
+
+      // 3. Immediately query overview again: cache must have been invalidated!
+      await overview(req, res);
+      assert.ok(leadFindAllCalls > callsBefore, 'Overview must re-query database after status update instead of using stale cache');
+      const summaryAfter = ((sentData ?? {}) as Record<string, unknown>).summary as { leads: { NEW: number } };
+      assert.equal(summaryAfter.leads.NEW, 9, 'Overview counts must reflect updated database state immediately');
+
+      console.log('✓ Cache invalidation after lead mutation and immediate fresh overview verified');
+    } finally {
+      Lead.findAll = origLeadFindAll;
+      Lead.findByPk = origLeadFindByPk;
+      FollowUp.findAll = origFollowUpFindAll;
+      Customer.findAll = origCustomerFindAll;
+      User.findAll = origUserFindAll;
+      Activity.create = origActivityCreate;
     }
   }
 }

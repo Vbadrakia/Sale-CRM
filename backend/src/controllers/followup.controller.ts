@@ -12,6 +12,7 @@ import { getAccessibleLead, leadScopeWhere } from '../services/lead.service';
 import { logActivity } from '../services/activity.service';
 import { withDbRetry } from '../config/database';
 import { escapeLike } from '../utils/normalize';
+import { invalidateDashboardScopes } from './dashboard.controller';
 
 const USER_ATTRS = ['id', 'firstName', 'lastName', 'email'];
 
@@ -208,6 +209,7 @@ export async function createFollowUp(req: Request, res: Response) {
     metadata: { followUpId: followUp.id },
   });
 
+  invalidateDashboardScopes(assignedToId, lead.assignedBdeId);
   return sendCreated(res, followUp, 'Follow-up created');
 }
 
@@ -226,6 +228,7 @@ export async function updateFollowUp(req: Request, res: Response) {
     assignedToId: number | null;
   }>;
 
+  const previousAssignedToId = followUp.assignedToId;
   if (body.title !== undefined) followUp.title = body.title;
   if (body.description !== undefined) followUp.description = body.description;
   if (body.dueDate !== undefined) followUp.dueDate = body.dueDate;
@@ -250,7 +253,6 @@ export async function updateFollowUp(req: Request, res: Response) {
     followUp.assignedToId = body.assignedToId;
   }
 
-
   await withDbRetry(() => followUp.save());
   await recalculateLeadNextFollowUp(followUp.leadId);
 
@@ -262,6 +264,7 @@ export async function updateFollowUp(req: Request, res: Response) {
     metadata: { followUpId: followUp.id },
   });
 
+  invalidateDashboardScopes(previousAssignedToId, followUp.assignedToId);
   return sendSuccess(res, followUp, 'Follow-up updated');
 }
 
@@ -286,6 +289,7 @@ export async function completeFollowUp(req: Request, res: Response) {
     metadata: { followUpId: followUp.id },
   });
 
+  invalidateDashboardScopes(followUp.assignedToId);
   return sendSuccess(res, followUp, 'Follow-up completed');
 }
 
@@ -309,6 +313,7 @@ export async function cancelFollowUp(req: Request, res: Response) {
     metadata: { followUpId: followUp.id },
   });
 
+  invalidateDashboardScopes(followUp.assignedToId);
   return sendSuccess(res, followUp, 'Follow-up cancelled');
 }
 
@@ -328,6 +333,7 @@ export async function deleteFollowUp(req: Request, res: Response) {
     metadata: { followUpId: followUp.id },
   });
 
+  invalidateDashboardScopes(followUp.assignedToId);
   return sendSuccess(res, { id: followUp.id }, 'Follow-up deleted');
 }
 

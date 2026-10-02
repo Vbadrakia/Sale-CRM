@@ -1,7 +1,9 @@
 import { useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { Button, Field, Modal, Select, TextArea, TextInput } from '@/components/ui';
 import { leadApi } from '@/api/services';
 import { ApiRequestError } from '@/api/client';
+import { invalidateCrmData } from '@/api/cache';
 import { useToast } from '@/context/ToastContext';
 import type { AssignableUser, Lead } from '@/types';
 
@@ -70,6 +72,7 @@ export function LeadFormModal({
   const [allowDuplicate, setAllowDuplicate] = useState(false);
   const [loading, setLoading] = useState(false);
   const toast = useToast();
+  const queryClient = useQueryClient();
 
   function set(key: string, value: string) {
     setForm((current) => ({ ...current, [key]: value }));
@@ -96,6 +99,7 @@ export function LeadFormModal({
       if (!editing && allowDuplicate) payload.allowDuplicate = true;
       const result = editing ? await leadApi.update(lead!.id, payload) : await leadApi.create(payload);
       toast.success(editing ? 'Lead updated' : 'Lead created');
+      void invalidateCrmData(queryClient, ['leads']);
       onSaved(result.data);
     } catch (error) {
       if (error instanceof ApiRequestError) {

@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
+import { useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, Mail, MessageCircle } from 'lucide-react';
 import { customerApi } from '@/api/services';
 import { ApiRequestError } from '@/api/client';
+import { invalidateCrmData } from '@/api/cache';
 import { Button, Card, ErrorState, Field, SectionTitle, TextArea, TextInput } from '@/components/ui';
 import { useToast } from '@/context/ToastContext';
 import { formatDateTime, gmailComposeUrl, whatsAppUrl } from '@/utils/format';
@@ -12,6 +14,7 @@ export default function CustomerDetailsPage() {
   const { id } = useParams();
   const customerId = Number(id);
   const toast = useToast();
+  const queryClient = useQueryClient();
 
   const [customer, setCustomer] = useState<Customer | null>(null);
   const [loading, setLoading] = useState(true);
@@ -59,6 +62,7 @@ export default function CustomerDetailsPage() {
       });
       setCustomer(result.data);
       toast.success('Customer updated');
+      void invalidateCrmData(queryClient, ['customers']);
     } catch (err) {
       toast.error(err instanceof ApiRequestError ? err.message : 'Could not save the changes.');
     } finally {

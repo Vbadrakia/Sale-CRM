@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
+import { useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, Mail, MessageCircle, Pencil, Plus, Trash2 } from 'lucide-react';
 import { followUpApi, leadApi, userApi } from '@/api/services';
 import { ApiRequestError } from '@/api/client';
+import { invalidateCrmData } from '@/api/cache';
 import {
   Button,
   Card,
@@ -38,6 +40,7 @@ export default function LeadDetailsPage() {
   const navigate = useNavigate();
   const { isAdmin, user } = useAuth();
   const toast = useToast();
+  const queryClient = useQueryClient();
 
   const [lead, setLead] = useState<Lead | null>(null);
   const [followUps, setFollowUps] = useState<FollowUp[]>([]);
@@ -128,6 +131,7 @@ export default function LeadDetailsPage() {
       toast.success(`Lead moved to ${STATUS_LABELS[statusTarget]}`);
       setStatusTarget('');
       setLostReason('');
+      void invalidateCrmData(queryClient, ['leads']);
       await load();
     } catch (err) {
       toast.error(err instanceof ApiRequestError ? err.message : 'Could not update the status.');
@@ -141,6 +145,7 @@ export default function LeadDetailsPage() {
     try {
       await leadApi.assign(leadId, value ? Number(value) : null);
       toast.success('Assignment updated');
+      void invalidateCrmData(queryClient, ['leads']);
       await load();
     } catch (err) {
       toast.error(err instanceof ApiRequestError ? err.message : 'Could not reassign this lead.');
@@ -156,6 +161,7 @@ export default function LeadDetailsPage() {
       await leadApi.addNote(leadId, note.trim());
       setNote('');
       toast.success('Note added');
+      void invalidateCrmData(queryClient, ['leads']);
       await load();
     } catch (err) {
       toast.error(err instanceof ApiRequestError ? err.message : 'Could not add the note.');
@@ -170,6 +176,7 @@ export default function LeadDetailsPage() {
       const result = await leadApi.convert(leadId, {});
       toast.success('Lead converted to a customer');
       setConfirmConvert(false);
+      void invalidateCrmData(queryClient, ['leads', 'customers']);
       navigate(`/customers/${result.data.id}`);
     } catch (err) {
       toast.error(err instanceof ApiRequestError ? err.message : 'Could not convert this lead.');
@@ -183,6 +190,7 @@ export default function LeadDetailsPage() {
     try {
       await leadApi.remove(leadId);
       toast.success('Lead deleted');
+      void invalidateCrmData(queryClient, ['leads']);
       navigate('/leads');
     } catch (err) {
       toast.error(err instanceof ApiRequestError ? err.message : 'Could not delete this lead.');
@@ -196,6 +204,7 @@ export default function LeadDetailsPage() {
     try {
       await followUpApi.complete(followUp.id);
       toast.success('Follow-up completed');
+      void invalidateCrmData(queryClient, ['followups', 'leads']);
       await load();
     } catch (err) {
       toast.error(err instanceof ApiRequestError ? err.message : 'Could not complete the follow-up.');

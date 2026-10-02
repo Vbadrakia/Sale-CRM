@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Download, FileSpreadsheet, Upload } from 'lucide-react';
+import { useQueryClient } from '@tanstack/react-query';
 import { importApi, userApi } from '@/api/services';
 import { ApiRequestError, downloadFile } from '@/api/client';
+import { invalidateCrmData } from '@/api/cache';
 import { Button, Card, EmptyState, ErrorState, Field, SectionTitle, Select, TableSkeleton } from '@/components/ui';
 import { useToast } from '@/context/ToastContext';
 import { useAuth } from '@/context/AuthContext';
@@ -32,6 +34,7 @@ const FIELD_LABELS: Record<string, string> = {
 export default function ImportsPage() {
   const toast = useToast();
   const { isAdmin, user } = useAuth();
+  const queryClient = useQueryClient();
   const fileInput = useRef<HTMLInputElement>(null);
 
   const [file, setFile] = useState<File | null>(null);
@@ -133,6 +136,7 @@ export default function ImportsPage() {
       setFile(null);
       setPreview(null);
       if (fileInput.current) fileInput.current.value = '';
+      void invalidateCrmData(queryClient, ['leads']);
       await loadJobs();
     } catch (err) {
       toast.error(err instanceof ApiRequestError ? err.message : 'The import could not be completed.');

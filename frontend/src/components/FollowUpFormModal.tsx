@@ -1,7 +1,9 @@
 import { useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { Button, Field, Modal, Select, TextArea, TextInput } from '@/components/ui';
 import { followUpApi } from '@/api/services';
 import { ApiRequestError } from '@/api/client';
+import { invalidateCrmData } from '@/api/cache';
 import { useToast } from '@/context/ToastContext';
 import type { AssignableUser, FollowUp } from '@/types';
 
@@ -32,6 +34,7 @@ export function FollowUpFormModal({
   const [formError, setFormError] = useState('');
   const [loading, setLoading] = useState(false);
   const toast = useToast();
+  const queryClient = useQueryClient();
 
   async function submit() {
     const nextErrors: Record<string, string> = {};
@@ -55,6 +58,7 @@ export function FollowUpFormModal({
       else await followUpApi.create({ ...payload, leadId });
 
       toast.success(editing ? 'Follow-up updated' : 'Follow-up created');
+      void invalidateCrmData(queryClient, ['followups', 'leads']);
       onSaved();
     } catch (error) {
       if (error instanceof ApiRequestError) {

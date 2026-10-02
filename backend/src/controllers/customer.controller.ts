@@ -13,6 +13,7 @@ import { getAccessibleLead, withTransaction } from '../services/lead.service';
 import { logActivity } from '../services/activity.service';
 import { createNotification } from '../services/notification.service';
 import { escapeLike } from '../utils/normalize';
+import { invalidateDashboardScopes } from './dashboard.controller';
 
 const USER_ATTRS = ['id', 'firstName', 'lastName', 'email'];
 
@@ -146,6 +147,7 @@ export async function convertLead(req: Request, res: Response) {
     return created;
   });
 
+  invalidateDashboardScopes(customer.assignedBdeId);
   return sendCreated(res, customer, 'Lead converted to customer');
 }
 
@@ -187,5 +189,6 @@ export async function updateCustomer(req: Request, res: Response) {
 
   await withDbRetry(() => customer.save());
 
+  invalidateDashboardScopes(customer.assignedBdeId);
   return sendSuccess(res, customer, 'Customer updated');
 }

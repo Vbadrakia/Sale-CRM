@@ -21,6 +21,7 @@ import { logActivity } from '../services/activity.service';
 import { createNotification } from '../services/notification.service';
 import { LeadPriority, LeadStatus } from '../types';
 import { withDbRetry } from '../config/database';
+import { invalidateDashboardScopes } from './dashboard.controller';
 
 /**
  * Step 1 — parse the uploaded file, auto-detect columns and return a preview.
@@ -375,6 +376,10 @@ export async function processImportJobAsync({
         entityType: 'import_job',
         entityId: job.id,
       });
+    }
+
+    if (importedRows > 0) {
+      invalidateDashboardScopes(assignedBdeId, user.id);
     }
   } catch (sysErr) {
     console.error(`[IMPORT] Fatal error during import job ${job.id}:`, sysErr);

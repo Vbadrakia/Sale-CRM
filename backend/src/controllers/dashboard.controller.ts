@@ -36,6 +36,8 @@ function setCached<T>(key: string, data: T, ttlMs = DASHBOARD_CACHE_TTL_MS): voi
   dashboardCache.set(key, { data, expiresAt: Date.now() + ttlMs });
 }
 
+// Note: In Cloudflare Worker runtime, this cache is in-memory per edge isolate.
+// Cross-isolate staleness is bounded by the 30s TTL.
 export function invalidateDashboardCache(scopeKey?: string): void {
   if (scopeKey) {
     for (const key of dashboardCache.keys()) {
@@ -43,6 +45,15 @@ export function invalidateDashboardCache(scopeKey?: string): void {
     }
   } else {
     dashboardCache.clear();
+  }
+}
+
+export function invalidateDashboardScopes(...bdeIds: (number | string | null | undefined)[]): void {
+  invalidateDashboardCache('admin');
+  for (const id of bdeIds) {
+    if (id !== null && id !== undefined) {
+      invalidateDashboardCache(`bde:${id}`);
+    }
   }
 }
 

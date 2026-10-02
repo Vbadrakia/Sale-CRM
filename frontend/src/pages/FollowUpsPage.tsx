@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { useQueryClient } from '@tanstack/react-query';
 import { CalendarClock, CheckCircle2, MessageCircle, Pencil, XCircle } from 'lucide-react';
 import { followUpApi, userApi } from '@/api/services';
 import { ApiRequestError } from '@/api/client';
+import { invalidateCrmData } from '@/api/cache';
 import {
   Button,
   Card,
@@ -37,6 +39,7 @@ type ViewKey = (typeof VIEWS)[number]['key'];
 export default function FollowUpsPage() {
   const { isAdmin } = useAuth();
   const toast = useToast();
+  const queryClient = useQueryClient();
 
   const [view, setView] = useState<ViewKey>('today');
   const [page, setPage] = useState(1);
@@ -85,6 +88,7 @@ export default function FollowUpsPage() {
       toast.success('Follow-up completed');
       setCompleting(null);
       setOutcome('');
+      void invalidateCrmData(queryClient, ['followups', 'leads']);
       await load();
     } catch (err) {
       toast.error(err instanceof ApiRequestError ? err.message : 'Could not complete the follow-up.');
@@ -100,6 +104,7 @@ export default function FollowUpsPage() {
       await followUpApi.cancel(cancelling.id, null);
       toast.success('Follow-up cancelled');
       setCancelling(null);
+      void invalidateCrmData(queryClient, ['followups', 'leads']);
       await load();
     } catch (err) {
       toast.error(err instanceof ApiRequestError ? err.message : 'Could not cancel the follow-up.');

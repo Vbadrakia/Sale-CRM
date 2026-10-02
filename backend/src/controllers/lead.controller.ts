@@ -21,6 +21,7 @@ import { createNotification } from '../services/notification.service';
 import { LeadStatus } from '../types';
 import { withDbRetry } from '../config/database';
 import { escapeLike } from '../utils/normalize';
+import { invalidateDashboardScopes } from './dashboard.controller';
 
 const USER_ATTRS = ['id', 'firstName', 'lastName', 'email'];
 
@@ -206,6 +207,7 @@ export async function createLead(req: Request, res: Response) {
     return created;
   });
 
+  invalidateDashboardScopes(lead.assignedBdeId);
   return sendCreated(res, lead, 'Lead created');
 }
 
@@ -232,6 +234,7 @@ export async function updateLead(req: Request, res: Response) {
     metadata: { fields: changed },
   });
 
+  invalidateDashboardScopes(lead.assignedBdeId);
   return sendSuccess(res, lead, 'Lead updated');
 }
 
@@ -290,6 +293,7 @@ export async function updateLeadStatus(req: Request, res: Response) {
     });
   }
 
+  invalidateDashboardScopes(lead.assignedBdeId);
   return sendSuccess(res, lead, 'Status updated');
 }
 
@@ -340,6 +344,7 @@ export async function assignLead(req: Request, res: Response) {
     });
   }
 
+  invalidateDashboardScopes(previous, assignedBdeId);
   return sendSuccess(res, lead, 'Lead assignment updated');
 }
 
@@ -374,6 +379,7 @@ export async function deleteLead(req: Request, res: Response) {
   // Soft delete (paranoid) — activity history is preserved.
   await withDbRetry(() => lead.destroy());
 
+  invalidateDashboardScopes(lead.assignedBdeId);
   return sendSuccess(res, { id: lead.id }, 'Lead deleted');
 }
 
