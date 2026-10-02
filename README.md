@@ -110,3 +110,20 @@ DELETE FROM customers WHERE customer_code LIKE 'CU-2026-%' OR assigned_bde_id IN
 DELETE FROM users WHERE email IN ('admin@crm.local', 'sam@crm.local') OR email LIKE '%@crm.local';
 COMMIT;
 ```
+
+---
+
+## Production Migration Safety & Port Guidelines
+
+- **Port 5432 (Direct Connection)**: Always run migrations (`npm run db:migrate`) against direct port 5432. Session-level locks, advisory locks (`pg_advisory_lock`), and multi-statement DDL transactions require a direct PostgreSQL session.
+- **Port 6543 (Transaction Pooler Mode / Supavisor)**: Do NOT point migration runners to port 6543. Transaction poolers multiplex connections per transaction, causing multi-statement DDL or session state to fail.
+- **Testing Migration Aliases**: When upgrading an existing database, test against a copy of your production database first. Check `SELECT version FROM schema_migrations;` before and after migration to confirm legacy entries (`0002_lockdown_rls.sql` or `0002_token_version_idempotency.sql`) are mapped without re-running or creating duplicate rows.
+
+---
+
+## Lead List Query Optimization & EXPLAIN Notes
+
+The lead listing endpoint (`GET /api/leads`) is optimized for large scale datasets:
+- **`distinct: false`**: `findAndCountAll` uses `distinct: false` because associations (`assignedBde`, `importer`) are `belongsTo` (N:1) relationships. This avoids PostgreSQL executing an expensive `COUNT(DISTINCT "Lead"."id")` subquery with in-memory hash aggregation, yielding a clean `COUNT(*)` scan.
+- **Trigram GIN Indexes**: Migration `0005_trgm_search_indexes.sql` establishes GIN trigram indexes (`gin_trgm_ops`) on `company_name`, `contact_name`, `email`, `phone`, `city`, and `lead_code`.
+- **Query Plan (`EXPLAIN ANALYZE`)**: For text searches (`?search=term`), PostgreSQL switches from a sequential scan (`Seq Scan on leads`) to a `Bitmap Index Scan` on the corresponding `idx_leads_*_trgm` index, avoiding full-table scans even with leading wildcard `%term%` filters.

@@ -39,6 +39,15 @@ function getDatabaseConfig() {
 
   const rawUrl = process.env.DATABASE_URL || '';
   if (rawUrl) {
+    try {
+      const parsed = new URL(rawUrl);
+      if (parsed.port === '6543') {
+        console.warn('\n[WARNING] [db-migrate] Detected connection on port 6543 (Supabase transaction pooler).');
+        console.warn('Migrations should run against the direct connection (port 5432) to support session locks and DDL.\n');
+      }
+    } catch {
+      // Ignore URL parsing errors
+    }
     const isLocal = rawUrl.includes('localhost') || rawUrl.includes('127.0.0.1') || process.env.DB_SSL === 'false';
     const rejectUnauthorized = isProd ? true : process.env.DB_SSL_REJECT_UNAUTHORIZED !== 'false';
     const ca = normalizeCaCert(process.env.DB_CA_CERT || process.env.DB_SSL_CA);

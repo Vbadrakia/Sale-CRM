@@ -31,6 +31,7 @@ systemRouter.use((req, res, next) => {
     requireAdmin(req, res, next);
   });
 });
+systemRouter.get('/health', asyncHandler(health));
 systemRouter.get('/migration-status', asyncHandler(getMigrationStatus));
 systemRouter.post('/migrate', asyncHandler(runMigrations));
 apiRouter.use('/system', systemRouter);

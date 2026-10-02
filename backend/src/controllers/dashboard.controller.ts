@@ -6,6 +6,7 @@ import { env } from '../config/env';
 import { sendSuccess } from '../utils/apiResponse';
 import { currentUser } from '../middleware/auth';
 import { leadScopeWhere } from '../services/lead.service';
+import { checkSystemAuth } from './system.controller';
 
 interface CacheEntry<T> {
   data: T;
@@ -606,30 +607,59 @@ export async function followUpTrend(req: Request, res: Response) {
 }
 
 export async function health(req: Request, res: Response) {
-  let jwtStatus: 'ok' | 'missing';
-  try {
-    jwtStatus = env.jwt.secret ? 'ok' : 'missing';
-  } catch {
-    jwtStatus = 'missing';
-  }
+  const isAuthorized = (() => {
+    try {
+      checkSystemAuth(req);
+      return true;
+    } catch {
+      return false;
+    }
+  })();
 
   try {
     await withDbRetry(() => sequelize.authenticate());
-    return sendSuccess(res, { status: 'ok', database: 'up', jwt: jwtStatus }, 'Healthy');
+    if (isAuthorized) {
+      let jwtStatus: 'ok' | 'missing';
+      try {
+        jwtStatus = env.jwt.secret ? 'ok' : 'missing';
+      } catch {
+        jwtStatus = 'missing';
+      }
+      return sendSuccess(res, { status: 'ok', database: 'up', jwt: jwtStatus }, 'Healthy');
+    }
+    return sendSuccess(res, { status: 'ok' }, 'Healthy');
   } catch (err: unknown) {
     if (isTlsVerificationError(err)) {
       console.error(`[DB TLS ERROR] ${TLS_ACTIONABLE_ERROR}`);
     }
-    const errMsg = err instanceof Error ? err.message : String(err);
     console.error(`[HEALTH] Health check failed reqId=${req.id || 'none'}:`, err);
+
+    if (isAuthorized) {
+      let jwtStatus: 'ok' | 'missing';
+      try {
+        jwtStatus = env.jwt.secret ? 'ok' : 'missing';
+      } catch {
+        jwtStatus = 'missing';
+      }
+      const errMsg = err instanceof Error ? err.message : String(err);
+      return res.status(503).json({
+        success: false,
+        error: {
+          code: isTlsVerificationError(err) ? 'DB_TLS_ERROR' : 'DATABASE_ERROR',
+          message: isTlsVerificationError(err) ? TLS_ACTIONABLE_ERROR : 'Database temporarily unavailable',
+          details: errMsg,
+        },
+        jwt: jwtStatus,
+        requestId: req.id || undefined,
+      });
+    }
+
     return res.status(503).json({
       success: false,
       error: {
-        code: isTlsVerificationError(err) ? 'DB_TLS_ERROR' : 'DATABASE_ERROR',
-        message: isTlsVerificationError(err) ? TLS_ACTIONABLE_ERROR : 'Database temporarily unavailable',
-        details: errMsg,
+        code: 'SERVICE_UNAVAILABLE',
+        message: 'Service temporarily unavailable',
       },
-      jwt: jwtStatus,
       requestId: req.id || undefined,
     });
   }

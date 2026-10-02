@@ -426,19 +426,34 @@ export async function runSecurityTests() {
         json: (d: Record<string, unknown>) => { healthResJson = d; return fakeRes; },
       } as unknown as Response;
 
-      const fakeReq = { id: 'health-test-1' } as unknown as Request;
-
       // Mock database authenticate so health check passes
       const origAuth = sequelize.authenticate;
+      const origSysKey = process.env.SYSTEM_KEY;
       (sequelize as unknown as Record<string, unknown>).authenticate = async () => undefined;
       try {
-        await health(fakeReq, fakeRes);
-        const data = healthResJson.data as Record<string, unknown>;
-        assert.ok(data && (data.jwt === 'ok' || data.jwt === 'missing'), 'Health check must report jwt as ok or missing');
+        // 9C-1: Unauthenticated health check must NEVER leak JWT or database configuration status
+        const unauthReq = { id: 'health-test-unauth', headers: {} } as unknown as Request;
+        await health(unauthReq, fakeRes);
+        const unauthData = healthResJson.data as Record<string, unknown>;
+        assert.equal(unauthData.status, 'ok');
+        assert.equal(unauthData.jwt, undefined, 'Unauthenticated health check must NOT leak jwt configuration status');
+        assert.equal(unauthData.database, undefined, 'Unauthenticated health check must NOT leak database status');
+
+        // 9C-2: Authorized health check (via system key) reports diagnostic status safely without leaking secret
+        process.env.SYSTEM_KEY = 'test-system-key-for-health-check-min-32-chars';
+        const authReq = {
+          id: 'health-test-auth',
+          headers: { 'x-system-key': 'test-system-key-for-health-check-min-32-chars' },
+        } as unknown as Request;
+        await health(authReq, fakeRes);
+        const authData = healthResJson.data as Record<string, unknown>;
+        assert.ok(authData && (authData.jwt === 'ok' || authData.jwt === 'missing'), 'Authorized health check must report jwt status');
+        assert.equal(authData.database, 'up');
         const jsonStr = JSON.stringify(healthResJson);
         assert.equal(jsonStr.includes(origSecret), false, 'Health check MUST NOT leak JWT secret value');
       } finally {
         (sequelize as unknown as Record<string, unknown>).authenticate = origAuth;
+        process.env.SYSTEM_KEY = origSysKey;
       }
     } finally {
       appEnv.jwt.secret = origSecret;
