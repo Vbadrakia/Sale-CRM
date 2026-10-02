@@ -3,6 +3,7 @@ import { httpServerHandler } from 'cloudflare:node';
 import { createApp } from '../backend/src/app';
 import { runFollowUpReminderJob } from '../backend/src/jobs/followupReminders';
 import { runImportRetentionJob } from '../backend/src/jobs/importRetention';
+import { runRateLimitRetentionJob } from '../backend/src/jobs/rateLimitRetention';
 import { assertDatabaseConnection, updateDatabaseConfig } from '../backend/src/config/database';
 import { updateRuntimeEnv, isCompromisedSecret } from '../backend/src/config/env';
 import '../backend/src/models';
@@ -226,6 +227,7 @@ export default {
       const result = await runFollowUpReminderJob();
       console.log(`[cron] follow-up reminders: ${result.reminders}, overdue: ${result.overdue}`);
       await runImportRetentionJob();
+      await runRateLimitRetentionJob();
     } catch (err) {
       console.error('[cron] scheduled job failed:', err);
     }

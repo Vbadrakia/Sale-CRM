@@ -249,6 +249,28 @@ export async function runSecurityTests() {
         (sequelize as unknown as Record<string, unknown>).query = origQuery;
       }
     }
+
+    // 3E: Rate Limit Retention Job purges expired rows older than 1 hour
+    {
+      const { runRateLimitRetentionJob } = await import('../jobs/rateLimitRetention');
+      const origQuery = sequelize.query;
+      let executedSql = '';
+
+      (sequelize as unknown as Record<string, unknown>).query = (async (sql: string) => {
+        executedSql = sql;
+        return [null, { rowCount: 12 }];
+      }) as unknown as typeof origQuery;
+
+      try {
+        const result = await runRateLimitRetentionJob();
+        assert.equal(result.deletedRows, 12);
+        assert.ok(executedSql.includes('DELETE FROM rate_limits'));
+        assert.ok(executedSql.includes("expire_at < NOW() - INTERVAL '1 hour'"));
+        console.log('✓ Rate limit retention job correctly purges expired rows older than 1 hour');
+      } finally {
+        (sequelize as unknown as Record<string, unknown>).query = origQuery;
+      }
+    }
   }
 
   // Test 4: Secret Security & Compromised Secret Hash Protection (Task 1, 3)

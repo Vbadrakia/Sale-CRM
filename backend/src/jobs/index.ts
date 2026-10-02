@@ -1,8 +1,10 @@
 import cron from 'node-cron';
 import { runFollowUpReminderJob } from './followupReminders';
 import { runImportRetentionJob } from './importRetention';
+import { runRateLimitRetentionJob } from './rateLimitRetention';
 
 let running = false;
+let retentionRunning = false;
 
 export function startScheduledJobs() {
   // Every 10 minutes. A simple in-process guard prevents overlapping runs.
@@ -21,6 +23,20 @@ export function startScheduledJobs() {
       running = false;
     }
   });
-  console.log('[jobs] scheduled background jobs (every 10 minutes)');
+
+  // Expired rate limits cleanup every 15 minutes
+  cron.schedule('*/15 * * * *', async () => {
+    if (retentionRunning) return;
+    retentionRunning = true;
+    try {
+      await runRateLimitRetentionJob();
+    } catch (error) {
+      console.error('[jobs] rate limit retention job failed', error);
+    } finally {
+      retentionRunning = false;
+    }
+  });
+
+  console.log('[jobs] scheduled background jobs (reminders: 10m, rate-limit retention: 15m)');
 }
 
