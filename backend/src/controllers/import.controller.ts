@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
-import { Op } from 'sequelize';
-import { ImportError, ImportJob, Lead, User } from '../models';
+import { Op, QueryTypes } from 'sequelize';
+import { Activity, ImportError, ImportJob, Lead, User, sequelize } from '../models';
 import { ApiError } from '../utils/ApiError';
 import { sendCreated, sendPaginated, sendSuccess } from '../utils/apiResponse';
 import { buildPaginationMeta, parsePagination } from '../utils/pagination';
@@ -19,7 +19,7 @@ import {
 import { buildExistingLeadsLookupMap, generateLeadCode, leadScopeWhere, withTransaction } from '../services/lead.service';
 import { logActivity } from '../services/activity.service';
 import { createNotification } from '../services/notification.service';
-import { LeadPriority, LeadStatus } from '../types';
+import { ActivityType, LeadPriority, LeadStatus } from '../types';
 import { withDbRetry } from '../config/database';
 import { invalidateDashboardScopes } from './dashboard.controller';
 
@@ -271,6 +271,8 @@ export async function processImportJobAsync({
 
       const batch = decoratedRows.slice(i, i + BATCH_SIZE);
 
+      // Separate insertable rows from skipped ones (invalid / skipped duplicates)
+      const insertable: typeof batch = [];
       for (const decorated of batch) {
         if (decorated.state === 'INVALID') {
           invalidRows += 1;
@@ -288,56 +290,133 @@ export async function processImportJobAsync({
         } else {
           validRows += 1;
         }
+        insertable.push(decorated);
+      }
 
+      // Bulk-insert all insertable rows in a single transaction per batch
+      if (insertable.length > 0) {
         try {
           await withTransaction(async (transaction) => {
-            const created = await Lead.create(
-              {
-                leadCode: await generateLeadCode(transaction),
-                companyName: decorated.data.companyName as string,
-                contactName: decorated.data.contactName ?? null,
-                designation: decorated.data.designation ?? null,
-                phone: decorated.data.phone ?? null,
-                alternatePhone: decorated.data.alternatePhone ?? null,
-                email: decorated.data.email ?? null,
-                alternateEmail: decorated.data.alternateEmail ?? null,
-                website: decorated.data.website ?? null,
-                country: decorated.data.country ?? null,
-                state: decorated.data.state ?? null,
-                city: decorated.data.city ?? null,
-                industry: decorated.data.industry ?? null,
-                companySize: decorated.data.companySize ?? null,
-                serviceRequired: decorated.data.serviceRequired ?? null,
-                leadSource: decorated.data.leadSource ?? 'Import',
-                status: ((decorated.data.status as LeadStatus) || 'NEW') as LeadStatus,
-                priority: ((decorated.data.priority as LeadPriority) || 'MEDIUM') as LeadPriority,
-                assignedBdeId,
-                createdById: user.id,
-                importedById: user.id,
-                importJobId: job.id,
-                tags: decorated.data.tags ?? null,
-                remarks: decorated.data.remarks ?? null,
-                notes: decorated.data.notes ?? null,
-              },
-              { transaction },
+            // Pre-allocate lead codes in bulk: one DB call for the entire batch
+            const seqResults = await sequelize.query<{ nextval: string | number }>(
+              `SELECT nextval('lead_code_seq') AS nextval FROM generate_series(1, ${insertable.length})`,
+              { type: QueryTypes.SELECT, transaction },
             );
-            await logActivity({
-              leadId: created.id,
-              userId: user.id,
-              activityType: 'LEAD_IMPORTED',
-              description: `Imported from ${fileName} (row ${decorated.rowNumber})`,
-              metadata: { importJobId: job.id, rowNumber: decorated.rowNumber },
+            const year = new Date().getUTCFullYear();
+            const prefix = `LD-${year}-`;
+            const leadCodes = seqResults.map((r) => `${prefix}${String(r.nextval).padStart(5, '0')}`);
+
+            // Build all lead records with pre-computed normalized keys (bypasses beforeValidate hook overhead)
+            const leadRecords = insertable.map((decorated, idx) => ({
+              leadCode: leadCodes[idx],
+              companyName: decorated.data.companyName as string,
+              contactName: decorated.data.contactName ?? null,
+              designation: decorated.data.designation ?? null,
+              phone: decorated.data.phone ?? null,
+              alternatePhone: decorated.data.alternatePhone ?? null,
+              email: decorated.data.email ?? null,
+              alternateEmail: decorated.data.alternateEmail ?? null,
+              website: decorated.data.website ?? null,
+              country: decorated.data.country ?? null,
+              state: decorated.data.state ?? null,
+              city: decorated.data.city ?? null,
+              industry: decorated.data.industry ?? null,
+              companySize: decorated.data.companySize ?? null,
+              serviceRequired: decorated.data.serviceRequired ?? null,
+              leadSource: decorated.data.leadSource ?? 'Import',
+              status: ((decorated.data.status as LeadStatus) || 'NEW') as LeadStatus,
+              priority: ((decorated.data.priority as LeadPriority) || 'MEDIUM') as LeadPriority,
+              assignedBdeId,
+              createdById: user.id,
+              importedById: user.id,
+              importJobId: job.id,
+              tags: decorated.data.tags ?? null,
+              remarks: decorated.data.remarks ?? null,
+              notes: decorated.data.notes ?? null,
+              // Pre-computed normalized keys — the beforeValidate hook will also run,
+              // but since we already set them it becomes a no-op overwrite
+              emailKey: normalizeEmail(decorated.data.email ?? null),
+              phoneKey: phoneCompareKey(decorated.data.phone ?? null),
+              websiteKey: normalizeWebsite(decorated.data.website ?? null),
+              companyKey: normalizeCompareText(decorated.data.companyName ?? null),
+              contactKey: normalizeCompareText(decorated.data.contactName ?? null),
+            }));
+
+            // Single bulkCreate for all leads in this batch
+            const createdLeads = await Lead.bulkCreate(leadRecords, {
               transaction,
+              returning: true,
+              hooks: false, // Skip per-row beforeValidate since keys are pre-computed
             });
-            importedRows += 1;
+
+            // Bulk-create all activity records in a single INSERT
+            const activityRecords = createdLeads.map((lead, idx) => ({
+              leadId: lead.id,
+              userId: user.id,
+              activityType: 'LEAD_IMPORTED' as ActivityType,
+              description: `Imported from ${fileName} (row ${insertable[idx].rowNumber})`.slice(0, 500),
+              metadata: { importJobId: job.id, rowNumber: insertable[idx].rowNumber } as Record<string, unknown>,
+            }));
+
+            await Activity.bulkCreate(activityRecords, { transaction });
+
+            importedRows += createdLeads.length;
           });
-        } catch (rowError) {
-          skippedRows += 1;
-          failures.push({
-            rowNumber: decorated.rowNumber,
-            reason: rowError instanceof Error ? rowError.message.slice(0, 480) : 'Could not save row',
-            rowData: decorated.raw,
-          });
+        } catch (batchError) {
+          // If the entire batch fails, fall back to row-by-row to identify which rows are bad
+          console.warn(`[import] Batch insert failed for job ${jobId}, falling back to row-by-row:`, batchError instanceof Error ? batchError.message : batchError);
+          for (const decorated of insertable) {
+            try {
+              await withTransaction(async (transaction) => {
+                const created = await Lead.create(
+                  {
+                    leadCode: await generateLeadCode(transaction),
+                    companyName: decorated.data.companyName as string,
+                    contactName: decorated.data.contactName ?? null,
+                    designation: decorated.data.designation ?? null,
+                    phone: decorated.data.phone ?? null,
+                    alternatePhone: decorated.data.alternatePhone ?? null,
+                    email: decorated.data.email ?? null,
+                    alternateEmail: decorated.data.alternateEmail ?? null,
+                    website: decorated.data.website ?? null,
+                    country: decorated.data.country ?? null,
+                    state: decorated.data.state ?? null,
+                    city: decorated.data.city ?? null,
+                    industry: decorated.data.industry ?? null,
+                    companySize: decorated.data.companySize ?? null,
+                    serviceRequired: decorated.data.serviceRequired ?? null,
+                    leadSource: decorated.data.leadSource ?? 'Import',
+                    status: ((decorated.data.status as LeadStatus) || 'NEW') as LeadStatus,
+                    priority: ((decorated.data.priority as LeadPriority) || 'MEDIUM') as LeadPriority,
+                    assignedBdeId,
+                    createdById: user.id,
+                    importedById: user.id,
+                    importJobId: job.id,
+                    tags: decorated.data.tags ?? null,
+                    remarks: decorated.data.remarks ?? null,
+                    notes: decorated.data.notes ?? null,
+                  },
+                  { transaction },
+                );
+                await logActivity({
+                  leadId: created.id,
+                  userId: user.id,
+                  activityType: 'LEAD_IMPORTED',
+                  description: `Imported from ${fileName} (row ${decorated.rowNumber})`,
+                  metadata: { importJobId: job.id, rowNumber: decorated.rowNumber },
+                  transaction,
+                });
+                importedRows += 1;
+              });
+            } catch (rowError) {
+              skippedRows += 1;
+              failures.push({
+                rowNumber: decorated.rowNumber,
+                reason: rowError instanceof Error ? rowError.message.slice(0, 480) : 'Could not save row',
+                rowData: decorated.raw,
+              });
+            }
+          }
         }
       }
 
