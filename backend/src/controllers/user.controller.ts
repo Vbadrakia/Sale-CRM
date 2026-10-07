@@ -68,28 +68,54 @@ export async function listUsers(req: Request, res: Response) {
   return sendPaginated(res, data, buildPaginationMeta(page, pageSize, count));
 }
 
+interface AssignableBdeItem {
+  id: number;
+  fullName: string;
+  email: string;
+}
+
+let assignableBdesCache: { data: AssignableBdeItem[]; expiresAt: number } | null = null;
+let inFlightAssignableBdes: Promise<AssignableBdeItem[]> | null = null;
+
+export function invalidateAssignableBdesCache(): void {
+  assignableBdesCache = null;
+  inFlightAssignableBdes = null;
+}
+
 /** Lightweight list for assignment dropdowns. */
 export async function listAssignableBdes(_req: Request, res: Response) {
   try {
-    const users = await withDbRetry(() =>
-      User.findAll({
-        attributes: ['id', 'firstName', 'lastName', 'email'],
-        where: { role: 'BDE', isActive: true },
-        order: [['firstName', 'ASC'], ['lastName', 'ASC']],
-        raw: true,
-      })
-    );
-    return sendSuccess(
-      res,
-      (users || []).map((u: unknown) => {
-        const userObj = u as { id: number; firstName?: string; lastName?: string; email: string };
-        return {
-          id: userObj.id,
-          fullName: `${userObj.firstName || ''} ${userObj.lastName || ''}`.trim() || userObj.email,
-          email: userObj.email,
-        };
-      }),
-    );
+    if (assignableBdesCache && Date.now() < assignableBdesCache.expiresAt) {
+      return sendSuccess(res, assignableBdesCache.data);
+    }
+
+    if (!inFlightAssignableBdes) {
+      inFlightAssignableBdes = (async () => {
+        const users = await withDbRetry(() =>
+          User.findAll({
+            attributes: ['id', 'firstName', 'lastName', 'email'],
+            where: { role: 'BDE', isActive: true },
+            order: [['firstName', 'ASC'], ['lastName', 'ASC']],
+            raw: true,
+          })
+        );
+        const mapped: AssignableBdeItem[] = (users || []).map((u: unknown) => {
+          const userObj = u as { id: number; firstName?: string; lastName?: string; email: string };
+          return {
+            id: userObj.id,
+            fullName: `${userObj.firstName || ''} ${userObj.lastName || ''}`.trim() || userObj.email,
+            email: userObj.email,
+          };
+        });
+        assignableBdesCache = { data: mapped, expiresAt: Date.now() + 60_000 };
+        return mapped;
+      })().finally(() => {
+        inFlightAssignableBdes = null;
+      });
+    }
+
+    const data = await inFlightAssignableBdes;
+    return sendSuccess(res, data);
   } catch (err) {
     console.error('[listAssignableBdes] Error:', err);
     return sendSuccess(res, []);
@@ -138,6 +164,7 @@ export async function createUser(req: Request, res: Response) {
     console.error('[mail] failed to send welcome email', error);
   });
 
+  invalidateAssignableBdesCache();
   return sendCreated(
     res,
     toPublicUser(user),
@@ -180,6 +207,7 @@ export async function updateUser(req: Request, res: Response) {
     clearUserAuthCache(user.id);
   }
   await withDbRetry(() => user.save());
+  invalidateAssignableBdesCache();
 
   return sendSuccess(res, toPublicUser(user), 'User updated');
 }
@@ -199,6 +227,7 @@ export async function updateUserStatus(req: Request, res: Response) {
   user.tokenVersion = (user.tokenVersion || 1) + 1;
   clearUserAuthCache(user.id);
   await withDbRetry(() => user.save());
+  invalidateAssignableBdesCache();
   return sendSuccess(res, toPublicUser(user), isActive ? 'Account enabled' : 'Account disabled');
 }
 

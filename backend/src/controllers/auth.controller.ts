@@ -17,7 +17,7 @@ import {
 import { env } from '../config/env';
 import { sequelize, withDbRetry } from '../config/database';
 import { sendOtpEmail, sendPasswordResetEmail } from '../services/mailer.service';
-import { currentUser } from '../middleware/auth';
+import { currentUser, primeUserAuthCache } from '../middleware/auth';
 import { setAuthCookie, clearAuthCookie } from '../utils/cookies';
 
 const VERIFICATION = 'ACCOUNT_VERIFICATION';
@@ -112,6 +112,7 @@ export async function login(req: Request, res: Response) {
     throw new ApiError(500, 'Failed to issue authentication token', 'AUTH_TOKEN_ERROR');
   }
 
+  primeUserAuthCache(user);
   setAuthCookie(req, res, token);
   return sendSuccess(res, { token, user: toPublicUser(user), requiresVerification: false }, 'Signed in');
 }
@@ -158,6 +159,7 @@ export async function verifyOtp(req: Request, res: Response) {
   await withDbRetry(() => user.save());
 
   const jwtToken = signAuthToken({ id: user.id, role: user.role, email: user.email, tokenVersion: user.tokenVersion });
+  primeUserAuthCache(user);
   setAuthCookie(req, res, jwtToken);
   return sendSuccess(res, { token: jwtToken, user: toPublicUser(user) }, 'Account verified');
 }

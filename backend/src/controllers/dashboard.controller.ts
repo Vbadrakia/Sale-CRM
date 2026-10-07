@@ -37,6 +37,8 @@ function setCached<T>(key: string, data: T, ttlMs = DASHBOARD_CACHE_TTL_MS): voi
   dashboardCache.set(key, { data, expiresAt: Date.now() + ttlMs });
 }
 
+const inFlightOverview = new Map<string, Promise<Record<string, unknown>>>();
+
 // Note: In Cloudflare Worker runtime, this cache is in-memory per edge isolate.
 // Cross-isolate staleness is bounded by the 30s TTL.
 export function invalidateDashboardCache(scopeKey?: string): void {
@@ -44,8 +46,12 @@ export function invalidateDashboardCache(scopeKey?: string): void {
     for (const key of dashboardCache.keys()) {
       if (key.includes(scopeKey)) dashboardCache.delete(key);
     }
+    for (const key of inFlightOverview.keys()) {
+      if (key.includes(scopeKey)) inFlightOverview.delete(key);
+    }
   } else {
     dashboardCache.clear();
+    inFlightOverview.clear();
   }
 }
 
@@ -82,17 +88,7 @@ function lastTwelveMonths(): string[] {
   return months;
 }
 
-export async function overview(req: Request, res: Response) {
-  try {
-    const user = currentUser(req);
-    const scopeKey = user.role === 'ADMIN' ? 'admin' : `bde:${user.id}`;
-    const cacheKey = `overview:${scopeKey}`;
-
-    const cached = getCached<Record<string, unknown>>(cacheKey);
-    if (cached) {
-      return sendSuccess(res, cached);
-    }
-
+async function computeOverview(user: User, req: Request): Promise<Record<string, unknown>> {
   const leadWhere = leadScopeWhere(user);
   const fuWhere = followUpScope(req);
   const customerWhere: WhereOptions = user.role === 'ADMIN' ? {} : { assignedBdeId: user.id };
@@ -108,87 +104,83 @@ export async function overview(req: Request, res: Response) {
   const since30Days = new Date(Date.now() - 29 * 24 * 3600 * 1000);
   const dayAttr = literal("TO_CHAR(due_at, 'YYYY-MM-DD')");
 
-  // Run queries in two batches of 5 to prevent connection pool exhaustion and origin connection spikes
-  const rawStatusRows = await withDbRetry(() => Lead.findAll({
-    attributes: ['status', [fn('COUNT', col('id')), 'total']],
-    where: leadWhere,
-    group: ['status'],
-    raw: true,
-  }));
+  // Run in 2 parallel batches of 5 to maximize throughput while respecting pool limits
+  const [rawStatusRows, rawFuRow, rawCustRow, rawSourceRows, rawBdeLeads] = await Promise.all([
+    withDbRetry(() => Lead.findAll({
+      attributes: ['status', [fn('COUNT', col('id')), 'total']],
+      where: leadWhere,
+      group: ['status'],
+      raw: true,
+    })),
+    withDbRetry(() => FollowUp.findAll({
+      attributes: [
+        [fn('COUNT', literal(`CASE WHEN status = 'PENDING' AND due_at >= '${start.toISOString()}' AND due_at < '${end.toISOString()}' THEN 1 END`)), 'today'],
+        [fn('COUNT', literal(`CASE WHEN status = 'PENDING' AND due_at >= '${end.toISOString()}' THEN 1 END`)), 'upcoming'],
+        [fn('COUNT', literal(`CASE WHEN status = 'PENDING' AND due_at < '${now.toISOString()}' THEN 1 END`)), 'overdue'],
+        [fn('COUNT', literal(`CASE WHEN status = 'COMPLETED' THEN 1 END`)), 'completed'],
+      ],
+      where: fuWhere,
+      raw: true,
+    })),
+    withDbRetry(() => Customer.findAll({
+      attributes: [
+        [fn('COUNT', col('id')), 'total'],
+        [fn('COUNT', literal(`CASE WHEN created_at >= '${monthStart.toISOString()}' THEN 1 END`)), 'newThisMonth'],
+      ],
+      where: customerWhere,
+      raw: true,
+    })),
+    withDbRetry(() => Lead.findAll({
+      attributes: [['lead_source', 'leadSource'], [fn('COUNT', col('id')), 'total']],
+      where: leadWhere,
+      group: ['lead_source'],
+      order: [[literal('total'), 'DESC']],
+      limit: 12,
+      raw: true,
+    })),
+    withDbRetry(() => Lead.findAll({
+      attributes: [['assigned_bde_id', 'assignedBdeId'], 'status', [fn('COUNT', col('id')), 'total']],
+      where: leadWhere,
+      group: ['assigned_bde_id', 'status'],
+      raw: true,
+    })),
+  ]);
 
-  const rawFuRow = await withDbRetry(() => FollowUp.findAll({
-    attributes: [
-      [fn('COUNT', literal(`CASE WHEN status = 'PENDING' AND due_at >= '${start.toISOString()}' AND due_at < '${end.toISOString()}' THEN 1 END`)), 'today'],
-      [fn('COUNT', literal(`CASE WHEN status = 'PENDING' AND due_at >= '${end.toISOString()}' THEN 1 END`)), 'upcoming'],
-      [fn('COUNT', literal(`CASE WHEN status = 'PENDING' AND due_at < '${now.toISOString()}' THEN 1 END`)), 'overdue'],
-      [fn('COUNT', literal(`CASE WHEN status = 'COMPLETED' THEN 1 END`)), 'completed'],
-    ],
-    where: fuWhere,
-    raw: true,
-  }));
-
-  const rawCustRow = await withDbRetry(() => Customer.findAll({
-    attributes: [
-      [fn('COUNT', col('id')), 'total'],
-      [fn('COUNT', literal(`CASE WHEN created_at >= '${monthStart.toISOString()}' THEN 1 END`)), 'newThisMonth'],
-    ],
-    where: customerWhere,
-    raw: true,
-  }));
-
-  const rawSourceRows = await withDbRetry(() => Lead.findAll({
-    attributes: [['lead_source', 'leadSource'], [fn('COUNT', col('id')), 'total']],
-    where: leadWhere,
-    group: ['lead_source'],
-    order: [[literal('total'), 'DESC']],
-    limit: 12,
-    raw: true,
-  }));
-
-  const rawBdeLeads = await withDbRetry(() => Lead.findAll({
-    attributes: [['assigned_bde_id', 'assignedBdeId'], 'status', [fn('COUNT', col('id')), 'total']],
-    where: leadWhere,
-    group: ['assigned_bde_id', 'status'],
-    raw: true,
-  }));
-
-  const bdeUsers = await withDbRetry(() => User.findAll({
-    attributes: ['id', ['first_name', 'firstName'], ['last_name', 'lastName'], 'email', ['is_active', 'isActive']],
-    where: { role: 'BDE' },
-    order: [['first_name', 'ASC']],
-    raw: true,
-  }));
-
-  const rawCompletedFu = await withDbRetry(() => FollowUp.findAll({
-    attributes: [['assigned_to_id', 'assignedToId'], [fn('COUNT', col('id')), 'total']],
-    where: { status: 'COMPLETED' },
-    group: ['assigned_to_id'],
-    raw: true,
-  }));
-
-  const rawMonthlyLeads = await withDbRetry(() => Lead.findAll({
-    attributes: [[monthAttr, 'month'], [fn('COUNT', col('id')), 'total']],
-    where: { ...leadWhere, createdAt: { [Op.gte]: since12Months } },
-    group: [monthAttr as unknown as string],
-    order: [[monthAttr, 'ASC']],
-    raw: true,
-  }));
-
-  const rawMonthlyCust = await withDbRetry(() => Customer.findAll({
-    attributes: [[monthAttr, 'month'], [fn('COUNT', col('id')), 'total']],
-    where: { ...customerWhere, createdAt: { [Op.gte]: since12Months } },
-    group: [monthAttr as unknown as string],
-    order: [[monthAttr, 'ASC']],
-    raw: true,
-  }));
-
-  const rawFollowUpTrend = await withDbRetry(() => FollowUp.findAll({
-    attributes: [[dayAttr, 'day'], 'status', [fn('COUNT', col('id')), 'total']],
-    where: { ...fuWhere, dueAt: { [Op.gte]: since30Days } },
-    group: [dayAttr as unknown as string, 'status'],
-    order: [[dayAttr, 'ASC']],
-    raw: true,
-  }));
+  const [bdeUsers, rawCompletedFu, rawMonthlyLeads, rawMonthlyCust, rawFollowUpTrend] = await Promise.all([
+    withDbRetry(() => User.findAll({
+      attributes: ['id', ['first_name', 'firstName'], ['last_name', 'lastName'], 'email', ['is_active', 'isActive']],
+      where: { role: 'BDE' },
+      order: [['first_name', 'ASC']],
+      raw: true,
+    })),
+    withDbRetry(() => FollowUp.findAll({
+      attributes: [['assigned_to_id', 'assignedToId'], [fn('COUNT', col('id')), 'total']],
+      where: { status: 'COMPLETED' },
+      group: ['assigned_to_id'],
+      raw: true,
+    })),
+    withDbRetry(() => Lead.findAll({
+      attributes: [[monthAttr, 'month'], [fn('COUNT', col('id')), 'total']],
+      where: { ...leadWhere, createdAt: { [Op.gte]: since12Months } },
+      group: [monthAttr as unknown as string],
+      order: [[monthAttr, 'ASC']],
+      raw: true,
+    })),
+    withDbRetry(() => Customer.findAll({
+      attributes: [[monthAttr, 'month'], [fn('COUNT', col('id')), 'total']],
+      where: { ...customerWhere, createdAt: { [Op.gte]: since12Months } },
+      group: [monthAttr as unknown as string],
+      order: [[monthAttr, 'ASC']],
+      raw: true,
+    })),
+    withDbRetry(() => FollowUp.findAll({
+      attributes: [[dayAttr, 'day'], 'status', [fn('COUNT', col('id')), 'total']],
+      where: { ...fuWhere, dueAt: { [Op.gte]: since30Days } },
+      group: [dayAttr as unknown as string, 'status'],
+      order: [[dayAttr, 'ASC']],
+      raw: true,
+    })),
+  ]);
 
   // 1. Process summary & conversion & leadsByStatus
   const statusRows = rawStatusRows as unknown as { status: string; total: string }[];
@@ -299,7 +291,7 @@ export async function overview(req: Request, res: Response) {
   }
   const followUpTrendData = Array.from(days.values());
 
-  const result = {
+  return {
     summary: summaryData,
     leadsByStatus: leadsByStatusData,
     leadsBySource: leadsBySourceData,
@@ -308,8 +300,33 @@ export async function overview(req: Request, res: Response) {
     conversion: conversionData,
     followUps: followUpTrendData,
   };
+}
 
-    setCached(cacheKey, result);
+export async function overview(req: Request, res: Response) {
+  try {
+    const user = currentUser(req);
+    const scopeKey = user.role === 'ADMIN' ? 'admin' : `bde:${user.id}`;
+    const cacheKey = `overview:${scopeKey}`;
+
+    const cached = getCached<Record<string, unknown>>(cacheKey);
+    if (cached) {
+      return sendSuccess(res, cached);
+    }
+
+    let promise = inFlightOverview.get(cacheKey);
+    if (!promise) {
+      promise = computeOverview(user, req)
+        .then((data) => {
+          setCached(cacheKey, data);
+          return data;
+        })
+        .finally(() => {
+          inFlightOverview.delete(cacheKey);
+        });
+      inFlightOverview.set(cacheKey, promise);
+    }
+
+    const result = await promise;
     return sendSuccess(res, result);
   } catch (err: unknown) {
     console.error('[overview error]', err);

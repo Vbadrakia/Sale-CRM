@@ -225,6 +225,7 @@ export async function createLead(req: Request, res: Response) {
   });
 
   invalidateDashboardScopes(lead.assignedBdeId);
+  invalidateLeadFilterOptionsCache();
   return sendCreated(res, lead, 'Lead created');
 }
 
@@ -397,6 +398,7 @@ export async function deleteLead(req: Request, res: Response) {
   await withDbRetry(() => lead.destroy());
 
   invalidateDashboardScopes(lead.assignedBdeId);
+  invalidateLeadFilterOptionsCache();
   return sendSuccess(res, { id: lead.id }, 'Lead deleted');
 }
 
@@ -412,51 +414,95 @@ export async function listLeadActivities(req: Request, res: Response) {
   return sendSuccess(res, activities);
 }
 
+interface FilterCacheEntry {
+  data: {
+    sources: string[];
+    countries: string[];
+    states: string[];
+    cities: string[];
+  };
+  expiresAt: number;
+}
+
+const filterOptionsCache = new Map<string, FilterCacheEntry>();
+const inFlightFilterOptions = new Map<string, Promise<{
+  sources: string[];
+  countries: string[];
+  states: string[];
+  cities: string[];
+}>>();
+
+export function invalidateLeadFilterOptionsCache(): void {
+  filterOptionsCache.clear();
+  inFlightFilterOptions.clear();
+}
+
 /** Distinct values powering the lead-list filter dropdowns. */
 export async function leadFilterOptions(req: Request, res: Response) {
   try {
     const user = currentUser(req);
-    const where = leadScopeWhere(user);
-    const sources = await withDbRetry(() =>
-      Lead.findAll({
-        attributes: [[sequelize.fn('DISTINCT', sequelize.col('lead_source')), 'value']],
-        where,
-        raw: true,
-      })
-    );
-    const countries = await withDbRetry(() =>
-      Lead.findAll({
-        attributes: [[sequelize.fn('DISTINCT', sequelize.col('country')), 'value']],
-        where,
-        raw: true,
-      })
-    );
-    const states = await withDbRetry(() =>
-      Lead.findAll({
-        attributes: [[sequelize.fn('DISTINCT', sequelize.col('state')), 'value']],
-        where,
-        raw: true,
-      })
-    );
-    const cities = await withDbRetry(() =>
-      Lead.findAll({
-        attributes: [[sequelize.fn('DISTINCT', sequelize.col('city')), 'value']],
-        where,
-        raw: true,
-      })
-    );
-    const pick = (rows: unknown) =>
-      ((rows as { value?: string | null }[]) || [])
-        .map((row) => row?.value)
-        .filter((value): value is string => !!value)
-        .sort();
+    const scopeKey = user.role === 'ADMIN' ? 'admin' : `bde:${user.id}`;
+    const cached = filterOptionsCache.get(scopeKey);
+    if (cached && Date.now() < cached.expiresAt) {
+      return sendSuccess(res, cached.data);
+    }
 
-    return sendSuccess(res, {
-      sources: pick(sources),
-      countries: pick(countries),
-      states: pick(states),
-      cities: pick(cities),
-    });
+    let promise = inFlightFilterOptions.get(scopeKey);
+    if (!promise) {
+      promise = (async () => {
+        const where = leadScopeWhere(user);
+        const [sources, countries, states, cities] = await Promise.all([
+          withDbRetry(() =>
+            Lead.findAll({
+              attributes: [[sequelize.fn('DISTINCT', sequelize.col('lead_source')), 'value']],
+              where,
+              raw: true,
+            })
+          ),
+          withDbRetry(() =>
+            Lead.findAll({
+              attributes: [[sequelize.fn('DISTINCT', sequelize.col('country')), 'value']],
+              where,
+              raw: true,
+            })
+          ),
+          withDbRetry(() =>
+            Lead.findAll({
+              attributes: [[sequelize.fn('DISTINCT', sequelize.col('state')), 'value']],
+              where,
+              raw: true,
+            })
+          ),
+          withDbRetry(() =>
+            Lead.findAll({
+              attributes: [[sequelize.fn('DISTINCT', sequelize.col('city')), 'value']],
+              where,
+              raw: true,
+            })
+          ),
+        ]);
+        const pick = (rows: unknown) =>
+          ((rows as { value?: string | null }[]) || [])
+            .map((row) => row?.value)
+            .filter((value): value is string => !!value)
+            .sort();
+
+        const data = {
+          sources: pick(sources),
+          countries: pick(countries),
+          states: pick(states),
+          cities: pick(cities),
+        };
+        filterOptionsCache.set(scopeKey, { data, expiresAt: Date.now() + 60_000 });
+        return data;
+      })().finally(() => {
+        inFlightFilterOptions.delete(scopeKey);
+      });
+      inFlightFilterOptions.set(scopeKey, promise);
+    }
+
+    const result = await promise;
+    return sendSuccess(res, result);
   } catch (err) {
     console.error('[leadFilterOptions] Error:', err);
     return sendSuccess(res, {

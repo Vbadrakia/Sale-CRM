@@ -48,27 +48,30 @@ const validateWorkerConnection = (_client: unknown): boolean => {
         destroyed?: boolean;
         writable?: boolean;
         readable?: boolean;
+        readyState?: string;
       };
     };
     stream?: {
       destroyed?: boolean;
       writable?: boolean;
       readable?: boolean;
+      readyState?: string;
     };
   };
   if (c._ending || c._ended || c._errored) return false;
   const stream = c.connection?.stream || c.stream;
   if (stream) {
     if (stream.destroyed || stream.writable === false || stream.readable === false) return false;
+    if (typeof stream.readyState === 'string' && stream.readyState !== 'open') return false;
   }
-  // In serverless / worker environments, TCP connections cannot be reused across
-  // separate requests after an idle period. Any connection older than 1500ms since
-  // last query must be disposed rather than reused across requests.
+  // In serverless / worker environments, discard connections that have been idle for >5s
+  // to avoid stale edge isolate socket disconnects. Active connections (<5s) are reused safely.
   if (isWorkerRuntime && typeof c._lastUsedAt === 'number') {
-    if (Date.now() - c._lastUsedAt > 1500) {
+    if (Date.now() - c._lastUsedAt > 5000) {
       return false;
     }
   }
+  c._lastUsedAt = Date.now();
   return true;
 };
 
@@ -116,24 +119,20 @@ export function getSslConfig(): false | { require: boolean; rejectUnauthorized: 
 }
 
 const retryConfig = {
-  max: 3,
+  max: 1,
   match: [
     /SequelizeConnectionError/,
     /SequelizeConnectionRefusedError/,
     /SequelizeHostNotFoundError/,
     /SequelizeHostNotReachableError/,
     /SequelizeInvalidConnectionError/,
-    /ConnectionAcquireTimeoutError/,
-    /TimeoutError/,
-    /Query read timeout/,
     /Connection terminated/,
     /ECONNRESET/,
-    /ETIMEDOUT/,
     /socket hang up/,
     /Connection error/,
     /DATABASE_UNAVAILABLE/,
   ],
-  backoffBase: 150,
+  backoffBase: 100,
   backoffExponent: 1.5,
 };
 
@@ -146,12 +145,12 @@ export const sequelize = new Sequelize(dbUrl, {
   },
   retry: retryConfig,
   pool: {
-    max: isWorkerRuntime ? 10 : (process.env.NODE_ENV === 'test' ? 100 : env.db.poolMax),
+    max: isWorkerRuntime ? 15 : (process.env.NODE_ENV === 'test' ? 100 : env.db.poolMax),
     min: 0,
-    idle: isWorkerRuntime ? 0 : env.db.poolIdle,
-    acquire: isWorkerRuntime ? 15000 : env.db.poolAcquire,
-    evict: 0,
-    maxUses: isWorkerRuntime ? 1 : Infinity,
+    idle: isWorkerRuntime ? 5000 : env.db.poolIdle,
+    acquire: 20000,
+    evict: isWorkerRuntime ? 1000 : 0,
+    maxUses: Infinity,
     validate: validateWorkerConnection,
   },
   dialectOptions: {
@@ -198,7 +197,7 @@ export async function cleanupDatabasePool(): Promise<void> {
   }
 }
 
-export async function withDbRetry<T>(fn: () => Promise<T>, maxRetries = 3): Promise<T> {
+export async function withDbRetry<T>(fn: () => Promise<T>, maxRetries = 1): Promise<T> {
   let lastErr: unknown;
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
@@ -208,7 +207,7 @@ export async function withDbRetry<T>(fn: () => Promise<T>, maxRetries = 3): Prom
       const errMsg = err instanceof Error ? err.message : String(err);
       if (attempt < maxRetries) {
         console.warn(`[withDbRetry] Attempt ${attempt}/${maxRetries} failed, retrying... Error:`, errMsg);
-        await new Promise((resolve) => setTimeout(resolve, 200 * attempt));
+        await new Promise((resolve) => setTimeout(resolve, 150 * attempt));
       }
     }
   }
@@ -343,12 +342,12 @@ export function updateDatabaseConfig(connectionString: string): void {
     // Hyperdrive itself maintains connection multiplexing; maxUses: Infinity prevents
     // Sequelize from prematurely terminating cached Hyperdrive virtual connections.
     pool: {
-      max: 10,
+      max: 15,
       min: 0,
-      idle: 0,
-      acquire: 15000,
-      evict: 0,
-      maxUses: 1,
+      idle: 5000,
+      acquire: 20000,
+      evict: 1000,
+      maxUses: Infinity,
       validate: validateWorkerConnection,
     },
   };

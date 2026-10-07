@@ -25,6 +25,15 @@ const AUTH_CACHE_TTL_MS = 30_000; // 30 seconds max TTL
 const MAX_AUTH_CACHE_SIZE = 1000;
 
 const userAuthCache = new Map<string, CachedUserRecord>();
+const inFlightUserLookups = new Map<string, Promise<User | null>>();
+
+export function primeUserAuthCache(user: User) {
+  const targetId = Number(user.id);
+  const queryId = isNaN(targetId) ? user.id : targetId;
+  const tokenVersion = user.tokenVersion ?? (user.dataValues as unknown as { token_version?: number })?.token_version ?? 0;
+  const cacheKey = `${queryId}:${tokenVersion}`;
+  userAuthCache.set(cacheKey, { user, cachedAt: Date.now() });
+}
 
 export function clearUserAuthCache(userId?: number | string) {
   if (userId) {
@@ -34,8 +43,14 @@ export function clearUserAuthCache(userId?: number | string) {
         userAuthCache.delete(key);
       }
     }
+    for (const key of inFlightUserLookups.keys()) {
+      if (key.startsWith(prefix) || key === String(userId)) {
+        inFlightUserLookups.delete(key);
+      }
+    }
   } else {
     userAuthCache.clear();
+    inFlightUserLookups.clear();
   }
 }
 
@@ -114,9 +129,18 @@ export async function authenticate(req: Request, res: Response, next: NextFuncti
       user = cached.user;
     } else {
       try {
-        user = await withDbRetry(() => User.findByPk(queryId));
-        if (user) {
-          userAuthCache.set(cacheKey, { user, cachedAt: now });
+        let lookupPromise = inFlightUserLookups.get(cacheKey);
+        if (!lookupPromise) {
+          lookupPromise = withDbRetry(() => User.findByPk(queryId));
+          inFlightUserLookups.set(cacheKey, lookupPromise);
+        }
+        try {
+          user = await lookupPromise;
+          if (user) {
+            userAuthCache.set(cacheKey, { user, cachedAt: now });
+          }
+        } finally {
+          inFlightUserLookups.delete(cacheKey);
         }
       } catch (dbErr: unknown) {
         const errMsg = dbErr instanceof Error ? dbErr.message : String(dbErr);
