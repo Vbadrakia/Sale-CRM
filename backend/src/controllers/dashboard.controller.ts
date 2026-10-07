@@ -169,7 +169,7 @@ export async function overview(req: Request, res: Response) {
   const rawMonthlyLeads = await withDbRetry(() => Lead.findAll({
     attributes: [[monthAttr, 'month'], [fn('COUNT', col('id')), 'total']],
     where: { ...leadWhere, createdAt: { [Op.gte]: since12Months } },
-    group: [monthAttr],
+    group: [monthAttr as unknown as string],
     order: [[monthAttr, 'ASC']],
     raw: true,
   }));
@@ -177,7 +177,7 @@ export async function overview(req: Request, res: Response) {
   const rawMonthlyCust = await withDbRetry(() => Customer.findAll({
     attributes: [[monthAttr, 'month'], [fn('COUNT', col('id')), 'total']],
     where: { ...customerWhere, createdAt: { [Op.gte]: since12Months } },
-    group: [monthAttr],
+    group: [monthAttr as unknown as string],
     order: [[monthAttr, 'ASC']],
     raw: true,
   }));
@@ -185,7 +185,7 @@ export async function overview(req: Request, res: Response) {
   const rawFollowUpTrend = await withDbRetry(() => FollowUp.findAll({
     attributes: [[dayAttr, 'day'], 'status', [fn('COUNT', col('id')), 'total']],
     where: { ...fuWhere, dueAt: { [Op.gte]: since30Days } },
-    group: [dayAttr, 'status'],
+    group: [dayAttr as unknown as string, 'status'],
     order: [[dayAttr, 'ASC']],
     raw: true,
   }));
@@ -540,7 +540,7 @@ export async function monthlyTrend(req: Request, res: Response) {
         [fn('COUNT', col('id')), 'total'],
       ],
       where: { ...leadScopeWhere(user), createdAt: { [Op.gte]: since } },
-      group: [monthAttr],
+      group: [monthAttr as unknown as string],
       order: [[monthAttr, 'ASC']],
       raw: true,
     }));
@@ -550,7 +550,7 @@ export async function monthlyTrend(req: Request, res: Response) {
         [fn('COUNT', col('id')), 'total'],
       ],
       where: customerWhere,
-      group: [monthAttr],
+      group: [monthAttr as unknown as string],
       order: [[monthAttr, 'ASC']],
       raw: true,
     }));
@@ -626,7 +626,7 @@ export async function followUpTrend(req: Request, res: Response) {
       [fn('COUNT', col('id')), 'total'],
     ],
     where: { ...where, dueAt: { [Op.gte]: since } },
-    group: [dayAttr, 'status'],
+    group: [dayAttr as unknown as string, 'status'],
     order: [[dayAttr, 'ASC']],
     raw: true,
   }))) as unknown as { day: string; status: string; total: string }[];

@@ -42,6 +42,7 @@ const validateWorkerConnection = (_client: unknown): boolean => {
     _ending?: boolean;
     _ended?: boolean;
     _errored?: boolean;
+    _lastUsedAt?: number;
     connection?: {
       stream?: {
         destroyed?: boolean;
