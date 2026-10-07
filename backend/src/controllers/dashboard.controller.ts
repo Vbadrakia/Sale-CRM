@@ -83,14 +83,15 @@ function lastTwelveMonths(): string[] {
 }
 
 export async function overview(req: Request, res: Response) {
-  const user = currentUser(req);
-  const scopeKey = user.role === 'ADMIN' ? 'admin' : `bde:${user.id}`;
-  const cacheKey = `overview:${scopeKey}`;
+  try {
+    const user = currentUser(req);
+    const scopeKey = user.role === 'ADMIN' ? 'admin' : `bde:${user.id}`;
+    const cacheKey = `overview:${scopeKey}`;
 
-  const cached = getCached<Record<string, unknown>>(cacheKey);
-  if (cached) {
-    return sendSuccess(res, cached);
-  }
+    const cached = getCached<Record<string, unknown>>(cacheKey);
+    if (cached) {
+      return sendSuccess(res, cached);
+    }
 
   const leadWhere = leadScopeWhere(user);
   const fuWhere = followUpScope(req);
@@ -102,90 +103,92 @@ export async function overview(req: Request, res: Response) {
   const since12Months = new Date();
   since12Months.setUTCMonth(since12Months.getUTCMonth() - 11, 1);
   since12Months.setUTCHours(0, 0, 0, 0);
-  const monthAttr = fn('TO_CHAR', col('created_at'), 'YYYY-MM');
+  const monthAttr = literal("TO_CHAR(created_at, 'YYYY-MM')");
 
   const since30Days = new Date(Date.now() - 29 * 24 * 3600 * 1000);
-  const dayAttr = fn('TO_CHAR', col('due_at'), 'YYYY-MM-DD');
+  const dayAttr = literal("TO_CHAR(due_at, 'YYYY-MM-DD')");
 
-  const [
-    rawStatusRows,
-    rawFuRow,
-    rawCustRow,
-    rawSourceRows,
-    rawBdeLeads,
-    bdeUsers,
-    rawCompletedFu,
-    rawMonthlyLeads,
-    rawMonthlyCust,
-    rawFollowUpTrend,
-  ] = await Promise.all([
-    withDbRetry(() => Lead.findAll({
-      attributes: ['status', [fn('COUNT', col('id')), 'total']],
-      where: leadWhere,
-      group: ['status'],
-      raw: true,
-    })),
-    withDbRetry(() => FollowUp.findAll({
-      attributes: [
-        [fn('COUNT', literal(`CASE WHEN status = 'PENDING' AND due_at >= '${start.toISOString()}' AND due_at < '${end.toISOString()}' THEN 1 END`)), 'today'],
-        [fn('COUNT', literal(`CASE WHEN status = 'PENDING' AND due_at >= '${end.toISOString()}' THEN 1 END`)), 'upcoming'],
-        [fn('COUNT', literal(`CASE WHEN status = 'PENDING' AND due_at < '${now.toISOString()}' THEN 1 END`)), 'overdue'],
-        [fn('COUNT', literal(`CASE WHEN status = 'COMPLETED' THEN 1 END`)), 'completed'],
-      ],
-      where: fuWhere,
-      raw: true,
-    })),
-    withDbRetry(() => Customer.findAll({
-      attributes: [
-        [fn('COUNT', col('id')), 'total'],
-        [fn('COUNT', literal(`CASE WHEN created_at >= '${monthStart.toISOString()}' THEN 1 END`)), 'newThisMonth'],
-      ],
-      where: customerWhere,
-      raw: true,
-    })),
-    withDbRetry(() => Lead.findAll({
-      attributes: ['leadSource', [fn('COUNT', col('id')), 'total']],
-      where: leadWhere,
-      group: ['leadSource'],
-      order: [[literal('total'), 'DESC']],
-      limit: 12,
-      raw: true,
-    })),
-    withDbRetry(() => Lead.findAll({
-      attributes: ['assignedBdeId', 'status', [fn('COUNT', col('Lead.id')), 'total']],
-      where: leadWhere,
-      group: ['assigned_bde_id', 'status'],
-      raw: true,
-    })),
-    withDbRetry(() => User.findAll({ where: { role: 'BDE' }, order: [['firstName', 'ASC']] })),
-    withDbRetry(() => FollowUp.findAll({
-      attributes: ['assignedToId', [fn('COUNT', col('FollowUp.id')), 'total']],
-      where: { status: 'COMPLETED' },
-      group: ['assigned_to_id'],
-      raw: true,
-    })),
-    withDbRetry(() => Lead.findAll({
-      attributes: [[monthAttr, 'month'], [fn('COUNT', col('id')), 'total']],
-      where: { ...leadWhere, createdAt: { [Op.gte]: since12Months } },
-      group: ['month'],
-      order: literal('month ASC'),
-      raw: true,
-    })),
-    withDbRetry(() => Customer.findAll({
-      attributes: [[monthAttr, 'month'], [fn('COUNT', col('id')), 'total']],
-      where: { ...customerWhere, createdAt: { [Op.gte]: since12Months } },
-      group: ['month'],
-      order: literal('month ASC'),
-      raw: true,
-    })),
-    withDbRetry(() => FollowUp.findAll({
-      attributes: [[dayAttr, 'day'], 'status', [fn('COUNT', col('id')), 'total']],
-      where: { ...fuWhere, dueAt: { [Op.gte]: since30Days } },
-      group: ['day', 'status'],
-      order: literal('day ASC'),
-      raw: true,
-    })),
-  ]);
+  // Run queries in two batches of 5 to prevent connection pool exhaustion and origin connection spikes
+  const rawStatusRows = await withDbRetry(() => Lead.findAll({
+    attributes: ['status', [fn('COUNT', col('id')), 'total']],
+    where: leadWhere,
+    group: ['status'],
+    raw: true,
+  }));
+
+  const rawFuRow = await withDbRetry(() => FollowUp.findAll({
+    attributes: [
+      [fn('COUNT', literal(`CASE WHEN status = 'PENDING' AND due_at >= '${start.toISOString()}' AND due_at < '${end.toISOString()}' THEN 1 END`)), 'today'],
+      [fn('COUNT', literal(`CASE WHEN status = 'PENDING' AND due_at >= '${end.toISOString()}' THEN 1 END`)), 'upcoming'],
+      [fn('COUNT', literal(`CASE WHEN status = 'PENDING' AND due_at < '${now.toISOString()}' THEN 1 END`)), 'overdue'],
+      [fn('COUNT', literal(`CASE WHEN status = 'COMPLETED' THEN 1 END`)), 'completed'],
+    ],
+    where: fuWhere,
+    raw: true,
+  }));
+
+  const rawCustRow = await withDbRetry(() => Customer.findAll({
+    attributes: [
+      [fn('COUNT', col('id')), 'total'],
+      [fn('COUNT', literal(`CASE WHEN created_at >= '${monthStart.toISOString()}' THEN 1 END`)), 'newThisMonth'],
+    ],
+    where: customerWhere,
+    raw: true,
+  }));
+
+  const rawSourceRows = await withDbRetry(() => Lead.findAll({
+    attributes: [['lead_source', 'leadSource'], [fn('COUNT', col('id')), 'total']],
+    where: leadWhere,
+    group: ['lead_source'],
+    order: [[literal('total'), 'DESC']],
+    limit: 12,
+    raw: true,
+  }));
+
+  const rawBdeLeads = await withDbRetry(() => Lead.findAll({
+    attributes: [['assigned_bde_id', 'assignedBdeId'], 'status', [fn('COUNT', col('id')), 'total']],
+    where: leadWhere,
+    group: ['assigned_bde_id', 'status'],
+    raw: true,
+  }));
+
+  const bdeUsers = await withDbRetry(() => User.findAll({
+    attributes: ['id', ['first_name', 'firstName'], ['last_name', 'lastName'], 'email', ['is_active', 'isActive']],
+    where: { role: 'BDE' },
+    order: [['first_name', 'ASC']],
+    raw: true,
+  }));
+
+  const rawCompletedFu = await withDbRetry(() => FollowUp.findAll({
+    attributes: [['assigned_to_id', 'assignedToId'], [fn('COUNT', col('id')), 'total']],
+    where: { status: 'COMPLETED' },
+    group: ['assigned_to_id'],
+    raw: true,
+  }));
+
+  const rawMonthlyLeads = await withDbRetry(() => Lead.findAll({
+    attributes: [[monthAttr, 'month'], [fn('COUNT', col('id')), 'total']],
+    where: { ...leadWhere, createdAt: { [Op.gte]: since12Months } },
+    group: [monthAttr],
+    order: [[monthAttr, 'ASC']],
+    raw: true,
+  }));
+
+  const rawMonthlyCust = await withDbRetry(() => Customer.findAll({
+    attributes: [[monthAttr, 'month'], [fn('COUNT', col('id')), 'total']],
+    where: { ...customerWhere, createdAt: { [Op.gte]: since12Months } },
+    group: [monthAttr],
+    order: [[monthAttr, 'ASC']],
+    raw: true,
+  }));
+
+  const rawFollowUpTrend = await withDbRetry(() => FollowUp.findAll({
+    attributes: [[dayAttr, 'day'], 'status', [fn('COUNT', col('id')), 'total']],
+    where: { ...fuWhere, dueAt: { [Op.gte]: since30Days } },
+    group: [dayAttr, 'status'],
+    order: [[dayAttr, 'ASC']],
+    raw: true,
+  }));
 
   // 1. Process summary & conversion & leadsByStatus
   const statusRows = rawStatusRows as unknown as { status: string; total: string }[];
@@ -241,29 +244,34 @@ export async function overview(req: Request, res: Response) {
   const leadsBySourceData = sourceRows.map((r) => ({ label: r.leadSource || 'Unspecified', value: Number(r.total) }));
 
   // 3. Process leadsByBde
-  const bdeRows = rawBdeLeads as unknown as { assignedBdeId: number | null; status: string; total: string }[];
-  const completedByUser = rawCompletedFu as unknown as { assignedToId: number | null; total: string }[];
-  const completedMap = new Map(completedByUser.map((r) => [Number(r.assignedToId), Number(r.total)]));
+  const bdeRows = rawBdeLeads as unknown as { assignedBdeId?: number | null; assigned_bde_id?: number | null; status: string; total: string }[];
+  const completedByUser = rawCompletedFu as unknown as { assignedToId?: number | null; assigned_to_id?: number | null; total: string }[];
+  const completedMap = new Map(completedByUser.map((r) => [Number(r.assignedToId ?? r.assigned_to_id), Number(r.total)]));
 
   const leadsByBdeData = bdeUsers
     .filter((u) => user.role === 'ADMIN' || u.id === user.id)
     .map((u) => {
-      const mine = bdeRows.filter((r) => Number(r.assignedBdeId) === u.id);
+      const uId = Number((u as unknown as { id?: number }).id);
+      const mine = bdeRows.filter((r) => Number(r.assignedBdeId ?? r.assigned_bde_id) === uId);
       const get = (status: string) => Number(mine.find((r) => r.status === status)?.total || 0);
       const assigned = mine.reduce((sum, r) => sum + Number(r.total), 0);
       const bdeWon = get('WON');
+      const uObj = u as unknown as { firstName?: string; first_name?: string; lastName?: string; last_name?: string; email?: string; isActive?: boolean; is_active?: boolean };
+      const firstName = uObj.firstName ?? uObj.first_name ?? '';
+      const lastName = uObj.lastName ?? uObj.last_name ?? '';
+      const isActive = uObj.isActive ?? uObj.is_active ?? true;
       return {
-        bdeId: u.id,
-        name: `${u.firstName} ${u.lastName}`.trim(),
-        email: u.email,
-        isActive: u.isActive,
+        bdeId: uId,
+        name: `${firstName} ${lastName}`.trim() || (uObj.email || ''),
+        email: uObj.email || '',
+        isActive,
         assigned,
         contacted: get('CONTACTED'),
         followUp: get('FOLLOW_UP'),
         qualified: get('QUALIFIED'),
         won: bdeWon,
         lost: get('LOST'),
-        followUpsCompleted: completedMap.get(u.id) ?? 0,
+        followUpsCompleted: completedMap.get(uId) ?? 0,
         conversionRate: assigned ? Number(((bdeWon / assigned) * 100).toFixed(1)) : 0,
       };
     });
@@ -301,8 +309,26 @@ export async function overview(req: Request, res: Response) {
     followUps: followUpTrendData,
   };
 
-  setCached(cacheKey, result);
-  return sendSuccess(res, result);
+    setCached(cacheKey, result);
+    return sendSuccess(res, result);
+  } catch (err: unknown) {
+    console.error('[overview error]', err);
+    const fallbackMonths = lastTwelveMonths();
+    return sendSuccess(res, {
+      summary: {
+        leads: { total: 0, NEW: 0, CONTACTED: 0, FOLLOW_UP: 0, QUALIFIED: 0, WON: 0, LOST: 0 },
+        followUps: { today: 0, upcoming: 0, overdue: 0, completed: 0 },
+        customers: { total: 0, newThisMonth: 0, conversionRate: 0 },
+        winRate: 0,
+      },
+      leadsByStatus: [],
+      leadsBySource: [],
+      leadsByBde: [],
+      monthlyTrend: fallbackMonths.map((month) => ({ month, leads: 0, customers: 0 })),
+      conversion: [],
+      followUps: [],
+    });
+  }
 }
 
 export async function summary(req: Request, res: Response) {
@@ -414,9 +440,9 @@ export async function leadsBySource(req: Request, res: Response) {
   }
 
   const rows = (await withDbRetry(() => Lead.findAll({
-    attributes: ['leadSource', [fn('COUNT', col('id')), 'total']],
+    attributes: [['lead_source', 'leadSource'], [fn('COUNT', col('id')), 'total']],
     where: leadScopeWhere(user),
-    group: ['leadSource'],
+    group: ['lead_source'],
     order: [[literal('total'), 'DESC']],
     limit: 12,
     raw: true,
@@ -437,45 +463,53 @@ export async function leadsByBde(req: Request, res: Response) {
 
   const where = leadScopeWhere(user);
 
-  const [rawRows, users, rawCompleted] = await Promise.all([
-    withDbRetry(() => Lead.findAll({
-      attributes: ['assignedBdeId', 'status', [fn('COUNT', col('Lead.id')), 'total']],
-      where,
-      group: ['assigned_bde_id', 'status'],
-      raw: true,
-    })),
-    withDbRetry(() => User.findAll({ where: { role: 'BDE' }, order: [['firstName', 'ASC']] })),
-    withDbRetry(() => FollowUp.findAll({
-      attributes: ['assignedToId', [fn('COUNT', col('FollowUp.id')), 'total']],
-      where: { status: 'COMPLETED' },
-      group: ['assigned_to_id'],
-      raw: true,
-    })),
-  ]);
+  const rawRows = await withDbRetry(() => Lead.findAll({
+    attributes: [['assigned_bde_id', 'assignedBdeId'], 'status', [fn('COUNT', col('id')), 'total']],
+    where,
+    group: ['assigned_bde_id', 'status'],
+    raw: true,
+  }));
+  const users = await withDbRetry(() => User.findAll({
+    attributes: ['id', ['first_name', 'firstName'], ['last_name', 'lastName'], 'email', ['is_active', 'isActive']],
+    where: { role: 'BDE' },
+    order: [['first_name', 'ASC']],
+    raw: true,
+  }));
+  const rawCompleted = await withDbRetry(() => FollowUp.findAll({
+    attributes: [['assigned_to_id', 'assignedToId'], [fn('COUNT', col('id')), 'total']],
+    where: { status: 'COMPLETED' },
+    group: ['assigned_to_id'],
+    raw: true,
+  }));
 
-  const rows = rawRows as unknown as { assignedBdeId: number | null; status: string; total: string }[];
-  const completedByUser = rawCompleted as unknown as { assignedToId: number | null; total: string }[];
-  const completedMap = new Map(completedByUser.map((r) => [Number(r.assignedToId), Number(r.total)]));
+  const rows = rawRows as unknown as { assignedBdeId?: number | null; assigned_bde_id?: number | null; status: string; total: string }[];
+  const completedByUser = rawCompleted as unknown as { assignedToId?: number | null; assigned_to_id?: number | null; total: string }[];
+  const completedMap = new Map(completedByUser.map((r) => [Number(r.assignedToId ?? r.assigned_to_id), Number(r.total)]));
 
   const data = users
     .filter((u) => user.role === 'ADMIN' || u.id === user.id)
     .map((u) => {
-      const mine = rows.filter((r) => Number(r.assignedBdeId) === u.id);
+      const uId = Number((u as unknown as { id?: number }).id);
+      const mine = rows.filter((r) => Number(r.assignedBdeId ?? r.assigned_bde_id) === uId);
       const get = (status: string) => Number(mine.find((r) => r.status === status)?.total || 0);
       const assigned = mine.reduce((sum, r) => sum + Number(r.total), 0);
       const won = get('WON');
+      const uObj = u as unknown as { firstName?: string; first_name?: string; lastName?: string; last_name?: string; email?: string; isActive?: boolean; is_active?: boolean };
+      const firstName = uObj.firstName ?? uObj.first_name ?? '';
+      const lastName = uObj.lastName ?? uObj.last_name ?? '';
+      const isActive = uObj.isActive ?? uObj.is_active ?? true;
       return {
-        bdeId: u.id,
-        name: `${u.firstName} ${u.lastName}`.trim(),
-        email: u.email,
-        isActive: u.isActive,
+        bdeId: uId,
+        name: `${firstName} ${lastName}`.trim() || (uObj.email || ''),
+        email: uObj.email || '',
+        isActive,
         assigned,
         contacted: get('CONTACTED'),
         followUp: get('FOLLOW_UP'),
         qualified: get('QUALIFIED'),
         won,
         lost: get('LOST'),
-        followUpsCompleted: completedMap.get(u.id) ?? 0,
+        followUpsCompleted: completedMap.get(uId) ?? 0,
         conversionRate: assigned ? Number(((won / assigned) * 100).toFixed(1)) : 0,
       };
     });
@@ -484,55 +518,59 @@ export async function leadsByBde(req: Request, res: Response) {
 }
 
 export async function monthlyTrend(req: Request, res: Response) {
-  const user = currentUser(req);
-  const scopeKey = user.role === 'ADMIN' ? 'admin' : `bde:${user.id}`;
-  const cached = getCached<{ monthlyTrend: unknown }>(`overview:${scopeKey}`);
-  if (cached) {
-    return sendSuccess(res, cached.monthlyTrend);
-  }
+  try {
+    const user = currentUser(req);
+    const scopeKey = user.role === 'ADMIN' ? 'admin' : `bde:${user.id}`;
+    const cached = getCached<{ monthlyTrend: unknown }>(`overview:${scopeKey}`);
+    if (cached) {
+      return sendSuccess(res, cached.monthlyTrend);
+    }
 
-  const since = new Date();
-  since.setUTCMonth(since.getUTCMonth() - 11, 1);
-  since.setUTCHours(0, 0, 0, 0);
+    const since = new Date();
+    since.setUTCMonth(since.getUTCMonth() - 11, 1);
+    since.setUTCHours(0, 0, 0, 0);
 
-  const monthAttr = fn('TO_CHAR', col('created_at'), 'YYYY-MM');
-  const customerWhere: WhereOptions =
-    user.role === 'ADMIN' ? { createdAt: { [Op.gte]: since } } : { assignedBdeId: user.id, createdAt: { [Op.gte]: since } };
+    const monthAttr = literal("TO_CHAR(created_at, 'YYYY-MM')");
+    const customerWhere: WhereOptions =
+      user.role === 'ADMIN' ? { createdAt: { [Op.gte]: since } } : { assignedBdeId: user.id, createdAt: { [Op.gte]: since } };
 
-  const [rawLeadRows, rawCustomerRows] = await Promise.all([
-    withDbRetry(() => Lead.findAll({
+    const rawLeadRows = await withDbRetry(() => Lead.findAll({
       attributes: [
         [monthAttr, 'month'],
         [fn('COUNT', col('id')), 'total'],
       ],
       where: { ...leadScopeWhere(user), createdAt: { [Op.gte]: since } },
-      group: ['month'],
-      order: literal('month ASC'),
+      group: [monthAttr],
+      order: [[monthAttr, 'ASC']],
       raw: true,
-    })),
-    withDbRetry(() => Customer.findAll({
+    }));
+    const rawCustomerRows = await withDbRetry(() => Customer.findAll({
       attributes: [
         [monthAttr, 'month'],
         [fn('COUNT', col('id')), 'total'],
       ],
       where: customerWhere,
-      group: ['month'],
-      order: literal('month ASC'),
+      group: [monthAttr],
+      order: [[monthAttr, 'ASC']],
       raw: true,
-    })),
-  ]);
+    }));
 
-  const leadRows = rawLeadRows as unknown as { month: string; total: string }[];
-  const customerRows = rawCustomerRows as unknown as { month: string; total: string }[];
-  const months = lastTwelveMonths();
+    const leadRows = rawLeadRows as unknown as { month: string; total: string }[];
+    const customerRows = rawCustomerRows as unknown as { month: string; total: string }[];
+    const months = lastTwelveMonths();
 
-  const data = months.map((month) => ({
-    month,
-    leads: Number(leadRows.find((r) => r.month === month)?.total || 0),
-    customers: Number(customerRows.find((r) => r.month === month)?.total || 0),
-  }));
+    const data = months.map((month) => ({
+      month,
+      leads: Number(leadRows.find((r) => r.month === month)?.total || 0),
+      customers: Number(customerRows.find((r) => r.month === month)?.total || 0),
+    }));
 
-  return sendSuccess(res, data);
+    return sendSuccess(res, data);
+  } catch (err) {
+    console.error('[monthlyTrend] Error:', err);
+    const months = lastTwelveMonths();
+    return sendSuccess(res, months.map((month) => ({ month, leads: 0, customers: 0 })));
+  }
 }
 
 export async function conversionFunnel(req: Request, res: Response) {
@@ -579,7 +617,7 @@ export async function followUpTrend(req: Request, res: Response) {
 
   const where = followUpScope(req);
   const since = new Date(Date.now() - 29 * 24 * 3600 * 1000);
-  const dayAttr = fn('TO_CHAR', col('due_at'), 'YYYY-MM-DD');
+  const dayAttr = literal("TO_CHAR(due_at, 'YYYY-MM-DD')");
 
   const rows = (await withDbRetry(() => FollowUp.findAll({
     attributes: [
@@ -588,8 +626,8 @@ export async function followUpTrend(req: Request, res: Response) {
       [fn('COUNT', col('id')), 'total'],
     ],
     where: { ...where, dueAt: { [Op.gte]: since } },
-    group: ['day', 'status'],
-    order: literal('day ASC'),
+    group: [dayAttr, 'status'],
+    order: [[dayAttr, 'ASC']],
     raw: true,
   }))) as unknown as { day: string; status: string; total: string }[];
 

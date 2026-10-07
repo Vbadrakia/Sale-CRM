@@ -25,7 +25,7 @@ export async function listNotifications(req: Request, res: Response) {
 export async function unreadCount(req: Request, res: Response) {
   const user = currentUser(req);
   try {
-    const count = await withDbRetry(() => Notification.count({ where: { userId: user.id, isRead: false } }));
+    const count = await withDbRetry(() => Notification.count({ where: { userId: user.id, isRead: false } }), 1);
     return sendSuccess(res, { count });
   } catch (err: unknown) {
     console.warn(`[NOTIFICATION] unreadCount database check error for userId=${user.id}:`, err instanceof Error ? err.message : err);

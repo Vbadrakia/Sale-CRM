@@ -188,12 +188,13 @@ export function createDistributedLimiter(
     const customKey = keyGenerator ? keyGenerator(req) : '';
     const key = customKey ? `${prefix}:${ip}:${customKey}` : `${prefix}:${ip}`;
 
-    // Try DB-backed counter for distributed worker isolates; if it throws or times out (>300ms), fallback to bounded in-memory
-    let result: { allowed: boolean; remaining: number; resetAt: number } | null;
-    try {
-      result = await dbRateLimit(key, windowMs, limit);
-    } catch {
-      result = null;
+    let result: { allowed: boolean; remaining: number; resetAt: number } | null = null;
+    if (!isWorkerRuntime) {
+      try {
+        result = await dbRateLimit(key, windowMs, limit);
+      } catch {
+        result = null;
+      }
     }
 
     if (!result) {
@@ -221,11 +222,11 @@ export function createDistributedLimiter(
   };
 }
 
-// Per-IP global login rate limit (30 attempts per 15 min per IP to stop credential spraying)
-export const loginIpLimiter = createDistributedLimiter('auth:login:ip', 15 * 60 * 1000, 30);
+// Per-IP global login rate limit (120 attempts per 15 min per IP to stop credential spraying)
+export const loginIpLimiter = createDistributedLimiter('auth:login:ip', 15 * 60 * 1000, 120);
 
-// Per-(IP + Email) login rate limit (10 attempts per 15 min per account)
-export const loginAccountLimiter = createDistributedLimiter('auth:login:account', 15 * 60 * 1000, 10, (req) => {
+// Per-(IP + Email) login rate limit (60 attempts per 15 min per account)
+export const loginAccountLimiter = createDistributedLimiter('auth:login:account', 15 * 60 * 1000, 60, (req) => {
   const email = (req.body as { email?: string })?.email;
   return email ? email.toLowerCase().trim() : '';
 });

@@ -25,7 +25,6 @@ const AUTH_CACHE_TTL_MS = 30_000; // 30 seconds max TTL
 const MAX_AUTH_CACHE_SIZE = 1000;
 
 const userAuthCache = new Map<string, CachedUserRecord>();
-const userAuthInFlight = new Map<string, Promise<User | null>>();
 
 export function clearUserAuthCache(userId?: number | string) {
   if (userId) {
@@ -114,13 +113,8 @@ export async function authenticate(req: Request, res: Response, next: NextFuncti
     if (cached && now - cached.cachedAt < AUTH_CACHE_TTL_MS) {
       user = cached.user;
     } else {
-      let inFlight = userAuthInFlight.get(cacheKey);
-      if (!inFlight) {
-        inFlight = withDbRetry(() => User.findByPk(queryId));
-        userAuthInFlight.set(cacheKey, inFlight);
-      }
       try {
-        user = await inFlight;
+        user = await withDbRetry(() => User.findByPk(queryId));
         if (user) {
           userAuthCache.set(cacheKey, { user, cachedAt: now });
         }
@@ -129,8 +123,6 @@ export async function authenticate(req: Request, res: Response, next: NextFuncti
         console.error(`[AUTH] DB user lookup failed: ${errMsg}`);
         // FAIL CLOSED: Return 503 instead of fabricating a mock active admin/user
         return next(ApiError.database('Database connection unavailable. Please try again.', 'DATABASE_UNAVAILABLE'));
-      } finally {
-        userAuthInFlight.delete(cacheKey);
       }
     }
 

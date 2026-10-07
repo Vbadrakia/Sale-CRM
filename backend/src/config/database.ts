@@ -42,32 +42,32 @@ const validateWorkerConnection = (_client: unknown): boolean => {
     _ending?: boolean;
     _ended?: boolean;
     _errored?: boolean;
-    _createdAt?: number;
-    _lastUsedAt?: number;
     connection?: {
       stream?: {
         destroyed?: boolean;
         writable?: boolean;
         readable?: boolean;
-        readyState?: string;
       };
     };
     stream?: {
       destroyed?: boolean;
       writable?: boolean;
       readable?: boolean;
-      readyState?: string;
     };
   };
   if (c._ending || c._ended || c._errored) return false;
-
   const stream = c.connection?.stream || c.stream;
   if (stream) {
     if (stream.destroyed || stream.writable === false || stream.readable === false) return false;
-    if (typeof stream.readyState === 'string' && stream.readyState !== 'open') return false;
   }
-
-  c._lastUsedAt = Date.now();
+  // In serverless / worker environments, TCP connections cannot be reused across
+  // separate requests after an idle period. Any connection older than 1500ms since
+  // last query must be disposed rather than reused across requests.
+  if (isWorkerRuntime && typeof c._lastUsedAt === 'number') {
+    if (Date.now() - c._lastUsedAt > 1500) {
+      return false;
+    }
+  }
   return true;
 };
 
@@ -115,20 +115,24 @@ export function getSslConfig(): false | { require: boolean; rejectUnauthorized: 
 }
 
 const retryConfig = {
-  max: 1,
+  max: 3,
   match: [
     /SequelizeConnectionError/,
     /SequelizeConnectionRefusedError/,
     /SequelizeHostNotFoundError/,
     /SequelizeHostNotReachableError/,
     /SequelizeInvalidConnectionError/,
+    /ConnectionAcquireTimeoutError/,
+    /TimeoutError/,
+    /Query read timeout/,
     /Connection terminated/,
     /ECONNRESET/,
+    /ETIMEDOUT/,
     /socket hang up/,
     /Connection error/,
     /DATABASE_UNAVAILABLE/,
   ],
-  backoffBase: 100,
+  backoffBase: 150,
   backoffExponent: 1.5,
 };
 
@@ -141,18 +145,17 @@ export const sequelize = new Sequelize(dbUrl, {
   },
   retry: retryConfig,
   pool: {
-    max: isWorkerRuntime ? 5 : (process.env.NODE_ENV === 'test' ? 100 : env.db.poolMax),
+    max: isWorkerRuntime ? 10 : (process.env.NODE_ENV === 'test' ? 100 : env.db.poolMax),
     min: 0,
-    idle: isWorkerRuntime ? 10000 : env.db.poolIdle,
-    acquire: isWorkerRuntime ? 8000 : env.db.poolAcquire,
-    evict: isWorkerRuntime ? 1000 : 500,
-    maxUses: Infinity,
+    idle: isWorkerRuntime ? 0 : env.db.poolIdle,
+    acquire: isWorkerRuntime ? 15000 : env.db.poolAcquire,
+    evict: 0,
+    maxUses: isWorkerRuntime ? 1 : Infinity,
     validate: validateWorkerConnection,
   },
   dialectOptions: {
-    connectTimeout: 8000,
-    statement_timeout: 10000,
-    query_timeout: 8000,
+    connectTimeout: 20000,
+    statement_timeout: 30000,
     keepalives: true,
     keepalives_idle: 10,
     ...(isTestOrSslDisabled
@@ -194,7 +197,7 @@ export async function cleanupDatabasePool(): Promise<void> {
   }
 }
 
-export async function withDbRetry<T>(fn: () => Promise<T>, maxRetries = 1): Promise<T> {
+export async function withDbRetry<T>(fn: () => Promise<T>, maxRetries = 3): Promise<T> {
   let lastErr: unknown;
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
@@ -204,7 +207,7 @@ export async function withDbRetry<T>(fn: () => Promise<T>, maxRetries = 1): Prom
       const errMsg = err instanceof Error ? err.message : String(err);
       if (attempt < maxRetries) {
         console.warn(`[withDbRetry] Attempt ${attempt}/${maxRetries} failed, retrying... Error:`, errMsg);
-        await new Promise((resolve) => setTimeout(resolve, 150 * attempt));
+        await new Promise((resolve) => setTimeout(resolve, 200 * attempt));
       }
     }
   }
@@ -320,9 +323,8 @@ export function updateDatabaseConfig(connectionString: string): void {
     password: decodeURIComponent(parsed.password),
     retry: retryConfig,
     dialectOptions: {
-      connectTimeout: 8000,
-      statement_timeout: 10000,
-      query_timeout: 8000,
+      connectTimeout: 20000,
+      statement_timeout: 30000,
       keepalives: true,
       keepalives_idle: 10,
       ...(isHyperdrive
@@ -340,12 +342,12 @@ export function updateDatabaseConfig(connectionString: string): void {
     // Hyperdrive itself maintains connection multiplexing; maxUses: Infinity prevents
     // Sequelize from prematurely terminating cached Hyperdrive virtual connections.
     pool: {
-      max: 5,
+      max: 10,
       min: 0,
-      idle: 10000,
-      acquire: 8000,
-      evict: 1000,
-      maxUses: Infinity,
+      idle: 0,
+      acquire: 15000,
+      evict: 0,
+      maxUses: 1,
       validate: validateWorkerConnection,
     },
   };

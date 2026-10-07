@@ -83,6 +83,7 @@ export function errorHandler(err: unknown, req: Request, res: Response, _next: N
   };
 
   if (!env.isProduction && err instanceof Error) {
+    body.details = err.message;
     body.stack = err.stack;
   }
 

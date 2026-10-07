@@ -102,13 +102,6 @@ async function initializeWorkerConfig(env: Env): Promise<void> {
 
   if (isWorkerConfigInitialized) return;
   isWorkerConfigInitialized = true;
-
-  // Best-effort connectivity verification (non-blocking)
-  assertDatabaseConnection()
-    .then(() => console.log('[worker-db] Database connection verified'))
-    .catch((err) => {
-      console.warn('[worker-db] Initial database connection check failed:', err instanceof Error ? err.message : err);
-    });
 }
 
 if (typeof process !== 'undefined') {
@@ -167,9 +160,12 @@ export default {
     try {
       // 1. Route API requests to Express handler initialized with env bindings
       if (url.pathname.startsWith('/api')) {
+        console.log(`[Worker Fetch] ${request.method} ${url.pathname} reqId=${requestId}`);
         const handler = await getWorkerHttpHandler(env);
         try {
-          return await handler.fetch(request, env, ctx);
+          const res = await handler.fetch(request, env, ctx);
+          console.log(`[Worker Fetch Return] ${request.method} ${url.pathname} status=${res.status} reqId=${requestId}`);
+          return res;
         } catch (handlerErr: unknown) {
           console.error(`[Worker Express Handler Error] [reqId=${requestId}]:`, handlerErr);
           const errMsg = handlerErr instanceof Error ? (handlerErr.stack || handlerErr.message) : String(handlerErr);

@@ -40,7 +40,7 @@ export async function listUsers(req: Request, res: Response) {
     where,
     limit: pageSize,
     offset,
-    order: [['createdAt', 'DESC']],
+    order: [['created_at', 'DESC']],
   }));
 
   // Attach workload counts so the admin list is useful at a glance.
@@ -49,9 +49,9 @@ export async function listUsers(req: Request, res: Response) {
   if (ids.length) {
     try {
       const grouped = await Lead.findAll({
-        attributes: ['assignedBdeId', [sequelize.fn('COUNT', sequelize.col('id')), 'total']],
+        attributes: [['assigned_bde_id', 'assignedBdeId'], [sequelize.fn('COUNT', sequelize.col('id')), 'total']],
         where: { assignedBdeId: { [Op.in]: ids } },
-        group: ['assignedBdeId'],
+        group: ['assigned_bde_id'],
         raw: true,
       });
       for (const row of grouped as unknown as { assignedBdeId: number; total: string | number }[]) {
@@ -71,17 +71,24 @@ export async function listUsers(req: Request, res: Response) {
 /** Lightweight list for assignment dropdowns. */
 export async function listAssignableBdes(_req: Request, res: Response) {
   try {
-    const users = await withDbRetry(() => User.findAll({
-      where: { role: 'BDE', isActive: true },
-      order: [['firstName', 'ASC'], ['lastName', 'ASC']],
-    }));
+    const users = await withDbRetry(() =>
+      User.findAll({
+        attributes: ['id', 'firstName', 'lastName', 'email'],
+        where: { role: 'BDE', isActive: true },
+        order: [['firstName', 'ASC'], ['lastName', 'ASC']],
+        raw: true,
+      })
+    );
     return sendSuccess(
       res,
-      (users || []).map((u) => ({
-        id: u.id,
-        fullName: `${u.firstName || ''} ${u.lastName || ''}`.trim() || u.email,
-        email: u.email,
-      })),
+      (users || []).map((u: unknown) => {
+        const userObj = u as { id: number; firstName?: string; lastName?: string; email: string };
+        return {
+          id: userObj.id,
+          fullName: `${userObj.firstName || ''} ${userObj.lastName || ''}`.trim() || userObj.email,
+          email: userObj.email,
+        };
+      }),
     );
   } catch (err) {
     console.error('[listAssignableBdes] Error:', err);

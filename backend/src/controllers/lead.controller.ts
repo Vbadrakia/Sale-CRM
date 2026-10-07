@@ -19,7 +19,7 @@ import {
 import { logActivity } from '../services/activity.service';
 import { createNotification } from '../services/notification.service';
 import { LeadStatus } from '../types';
-import { withDbRetry } from '../config/database';
+import { sequelize, withDbRetry } from '../config/database';
 import { escapeLike } from '../utils/normalize';
 import { invalidateDashboardScopes } from './dashboard.controller';
 
@@ -67,23 +67,40 @@ export async function listLeads(req: Request, res: Response) {
     });
   }
 
-  const order: Order = [[query.sortBy || 'createdAt', query.sortDir || 'DESC']];
+  const sortMap: Record<string, string> = {
+    createdAt: 'created_at',
+    updatedAt: 'updated_at',
+    companyName: 'company_name',
+    contactName: 'contact_name',
+    leadCode: 'lead_code',
+    status: 'status',
+    priority: 'priority',
+    leadSource: 'lead_source',
+    nextFollowUpAt: 'next_follow_up_at',
+  };
+  const sortCol = sortMap[query.sortBy || 'createdAt'] || 'created_at';
+  const order: Order = [[sortCol, query.sortDir || 'DESC']];
 
   const includes = [
     { model: User, as: 'assignedBde', attributes: USER_ATTRS },
     ...(user.role === 'ADMIN' ? [{ model: User, as: 'importer', attributes: USER_ATTRS }] : []),
   ];
 
-  const { rows, count } = await withDbRetry(() => Lead.findAndCountAll({
-    where: { [Op.and]: conditions },
-    include: includes,
-    limit: pageSize,
-    offset,
-    order,
-    distinct: false,
-  }));
+  try {
+    const { rows, count } = await withDbRetry(() => Lead.findAndCountAll({
+      where: { [Op.and]: conditions },
+      include: includes,
+      limit: pageSize,
+      offset,
+      order,
+      distinct: false,
+    }));
 
-  return sendPaginated(res, rows, buildPaginationMeta(page, pageSize, count));
+    return sendPaginated(res, rows, buildPaginationMeta(page, pageSize, count));
+  } catch (err) {
+    console.error('[listLeads] Error querying leads:', err);
+    return sendPaginated(res, [], buildPaginationMeta(page, pageSize, 0));
+  }
 }
 
 export async function getLead(req: Request, res: Response) {
@@ -397,24 +414,56 @@ export async function listLeadActivities(req: Request, res: Response) {
 
 /** Distinct values powering the lead-list filter dropdowns. */
 export async function leadFilterOptions(req: Request, res: Response) {
-  const user = currentUser(req);
-  const where = leadScopeWhere(user);
-  const [sources, countries, states, cities] = await withDbRetry(() => Promise.all([
-    Lead.aggregate('leadSource', 'DISTINCT', { plain: false, where }),
-    Lead.aggregate('country', 'DISTINCT', { plain: false, where }),
-    Lead.aggregate('state', 'DISTINCT', { plain: false, where }),
-    Lead.aggregate('city', 'DISTINCT', { plain: false, where }),
-  ]));
-  const pick = (rows: unknown, key: string) =>
-    (rows as Record<string, string | null>[])
-      .map((row) => row.DISTINCT ?? row[key])
-      .filter((value): value is string => !!value)
-      .sort();
+  try {
+    const user = currentUser(req);
+    const where = leadScopeWhere(user);
+    const sources = await withDbRetry(() =>
+      Lead.findAll({
+        attributes: [[sequelize.fn('DISTINCT', sequelize.col('lead_source')), 'value']],
+        where,
+        raw: true,
+      })
+    );
+    const countries = await withDbRetry(() =>
+      Lead.findAll({
+        attributes: [[sequelize.fn('DISTINCT', sequelize.col('country')), 'value']],
+        where,
+        raw: true,
+      })
+    );
+    const states = await withDbRetry(() =>
+      Lead.findAll({
+        attributes: [[sequelize.fn('DISTINCT', sequelize.col('state')), 'value']],
+        where,
+        raw: true,
+      })
+    );
+    const cities = await withDbRetry(() =>
+      Lead.findAll({
+        attributes: [[sequelize.fn('DISTINCT', sequelize.col('city')), 'value']],
+        where,
+        raw: true,
+      })
+    );
+    const pick = (rows: unknown) =>
+      ((rows as { value?: string | null }[]) || [])
+        .map((row) => row?.value)
+        .filter((value): value is string => !!value)
+        .sort();
 
-  return sendSuccess(res, {
-    sources: pick(sources, 'leadSource'),
-    countries: pick(countries, 'country'),
-    states: pick(states, 'state'),
-    cities: pick(cities, 'city'),
-  });
+    return sendSuccess(res, {
+      sources: pick(sources),
+      countries: pick(countries),
+      states: pick(states),
+      cities: pick(cities),
+    });
+  } catch (err) {
+    console.error('[leadFilterOptions] Error:', err);
+    return sendSuccess(res, {
+      sources: [],
+      countries: [],
+      states: [],
+      cities: [],
+    });
+  }
 }
