@@ -451,36 +451,34 @@ export async function leadFilterOptions(req: Request, res: Response) {
     if (!promise) {
       promise = (async () => {
         const where = leadScopeWhere(user);
-        const [sources, countries, states, cities] = await Promise.all([
-          withDbRetry(() =>
-            Lead.findAll({
-              attributes: [[sequelize.fn('DISTINCT', sequelize.col('lead_source')), 'value']],
-              where,
-              raw: true,
-            })
-          ),
-          withDbRetry(() =>
-            Lead.findAll({
-              attributes: [[sequelize.fn('DISTINCT', sequelize.col('country')), 'value']],
-              where,
-              raw: true,
-            })
-          ),
-          withDbRetry(() =>
-            Lead.findAll({
-              attributes: [[sequelize.fn('DISTINCT', sequelize.col('state')), 'value']],
-              where,
-              raw: true,
-            })
-          ),
-          withDbRetry(() =>
-            Lead.findAll({
-              attributes: [[sequelize.fn('DISTINCT', sequelize.col('city')), 'value']],
-              where,
-              raw: true,
-            })
-          ),
-        ]);
+        const sources = await withDbRetry(() =>
+          Lead.findAll({
+            attributes: [[sequelize.fn('DISTINCT', sequelize.col('lead_source')), 'value']],
+            where,
+            raw: true,
+          })
+        );
+        const countries = await withDbRetry(() =>
+          Lead.findAll({
+            attributes: [[sequelize.fn('DISTINCT', sequelize.col('country')), 'value']],
+            where,
+            raw: true,
+          })
+        );
+        const states = await withDbRetry(() =>
+          Lead.findAll({
+            attributes: [[sequelize.fn('DISTINCT', sequelize.col('state')), 'value']],
+            where,
+            raw: true,
+          })
+        );
+        const cities = await withDbRetry(() =>
+          Lead.findAll({
+            attributes: [[sequelize.fn('DISTINCT', sequelize.col('city')), 'value']],
+            where,
+            raw: true,
+          })
+        );
         const pick = (rows: unknown) =>
           ((rows as { value?: string | null }[]) || [])
             .map((row) => row?.value)

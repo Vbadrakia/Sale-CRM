@@ -42,36 +42,24 @@ const validateWorkerConnection = (_client: unknown): boolean => {
     _ending?: boolean;
     _ended?: boolean;
     _errored?: boolean;
-    _lastUsedAt?: number;
     connection?: {
       stream?: {
         destroyed?: boolean;
         writable?: boolean;
         readable?: boolean;
-        readyState?: string;
       };
     };
     stream?: {
       destroyed?: boolean;
       writable?: boolean;
       readable?: boolean;
-      readyState?: string;
     };
   };
   if (c._ending || c._ended || c._errored) return false;
   const stream = c.connection?.stream || c.stream;
   if (stream) {
     if (stream.destroyed || stream.writable === false || stream.readable === false) return false;
-    if (typeof stream.readyState === 'string' && stream.readyState !== 'open') return false;
   }
-  // In serverless / worker environments, discard connections that have been idle for >5s
-  // to avoid stale edge isolate socket disconnects. Active connections (<5s) are reused safely.
-  if (isWorkerRuntime && typeof c._lastUsedAt === 'number') {
-    if (Date.now() - c._lastUsedAt > 5000) {
-      return false;
-    }
-  }
-  c._lastUsedAt = Date.now();
   return true;
 };
 
@@ -145,17 +133,17 @@ export const sequelize = new Sequelize(dbUrl, {
   },
   retry: retryConfig,
   pool: {
-    max: isWorkerRuntime ? 15 : (process.env.NODE_ENV === 'test' ? 100 : env.db.poolMax),
+    max: isWorkerRuntime ? 10 : (process.env.NODE_ENV === 'test' ? 100 : env.db.poolMax),
     min: 0,
-    idle: isWorkerRuntime ? 5000 : env.db.poolIdle,
-    acquire: 20000,
-    evict: isWorkerRuntime ? 1000 : 0,
-    maxUses: Infinity,
+    idle: isWorkerRuntime ? 0 : env.db.poolIdle,
+    acquire: isWorkerRuntime ? 15000 : env.db.poolAcquire,
+    evict: 0,
+    maxUses: isWorkerRuntime ? 1 : Infinity,
     validate: validateWorkerConnection,
   },
   dialectOptions: {
-    connectTimeout: 20000,
-    statement_timeout: 30000,
+    connectTimeout: 10000,
+    statement_timeout: 15000,
     keepalives: true,
     keepalives_idle: 10,
     ...(isTestOrSslDisabled
@@ -323,8 +311,8 @@ export function updateDatabaseConfig(connectionString: string): void {
     password: decodeURIComponent(parsed.password),
     retry: retryConfig,
     dialectOptions: {
-      connectTimeout: 20000,
-      statement_timeout: 30000,
+      connectTimeout: 10000,
+      statement_timeout: 15000,
       keepalives: true,
       keepalives_idle: 10,
       ...(isHyperdrive
@@ -342,12 +330,12 @@ export function updateDatabaseConfig(connectionString: string): void {
     // Hyperdrive itself maintains connection multiplexing; maxUses: Infinity prevents
     // Sequelize from prematurely terminating cached Hyperdrive virtual connections.
     pool: {
-      max: 15,
+      max: 10,
       min: 0,
-      idle: 5000,
-      acquire: 20000,
-      evict: 1000,
-      maxUses: Infinity,
+      idle: 0,
+      acquire: 15000,
+      evict: 0,
+      maxUses: 1,
       validate: validateWorkerConnection,
     },
   };
